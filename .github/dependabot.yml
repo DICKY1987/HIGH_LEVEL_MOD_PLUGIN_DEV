@@ -1,0 +1,22 @@
+# Dependabot configuration (issue 13)
+#
+# This file configures GitHub Dependabot to monitor dependency
+# manifests and open pull requests when updates are available. It
+# also defines update schedules and security alerts processing.
+
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+
+allow:
+  - dependency-type: "all"
+
+security-updates: true

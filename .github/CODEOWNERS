@@ -1,0 +1,19 @@
+# CODEOWNERS (issue 11)
+#
+# This file maps files and directories to responsible teams or
+# individuals. Front‑matter `owner` values in documents must
+# correspond to entries here. Update as teams change.
+
+# Root ownership
+*        @platform-engineering
+
+# Plugin directories
+plugins/docs.* @docs-team
+plugins/*      @plugins-core
+
+# Policies and contracts
+policy/**      @security-team
+contracts/**   @contracts-team
+
+# CI workflows
+.github/**     @devops-team

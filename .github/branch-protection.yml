@@ -1,0 +1,23 @@
+# Branch Protection Policy (issue 11)
+#
+# This YAML file describes required checks and restrictions for
+# protected branches. It should be mirrored into the repository
+# settings by automation. The `main` branch must require pull
+# requests, status checks, and up-to-date approvals before merge.
+
+branch_protection:
+  main:
+    required_status_checks:
+      strict: true
+      contexts:
+        - "CI / id-guard"
+        - "CI / docs-propagate-dry-run"
+        - "CI / schema-validation"
+    enforce_admins: true
+    required_pull_request_reviews:
+      required_approvals: 2
+      dismiss_stale_reviews: true
+      require_code_owner_reviews: true
+    restrictions:
+      users: []
+      teams: ["platform-engineering", "security-team"]
