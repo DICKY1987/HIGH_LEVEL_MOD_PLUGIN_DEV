@@ -1,0 +1,9 @@
+{
+  "circuits": {
+    "tests.sample.SlowPlugin": {
+      "failures": 3,
+      "last_failure_ts": 1762735178.6706479,
+      "disabled": true
+    }
+  }
+}

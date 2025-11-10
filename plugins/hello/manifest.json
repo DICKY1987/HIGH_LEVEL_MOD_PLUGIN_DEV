@@ -1,0 +1,8 @@
+{
+  "name": "HelloPlugin",
+  "version": "0.1.0",
+  "module": "hello_plugin",
+  "class": "HelloPlugin",
+  "description": "Example discovered plugin that logs on file detection."
+}
+

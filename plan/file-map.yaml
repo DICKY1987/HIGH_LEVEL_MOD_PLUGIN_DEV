@@ -1,0 +1,22 @@
+- path: "fwgp/events.py"
+  delivers: ["DEL-PLUGIN-SDK"]
+  tests: ["tests/conformance/test_plugin_hooks.py::test_base_plugin_hooks_exist"]
+- path: "fwgp/plugins/base.py"
+  delivers: ["DEL-PLUGIN-SDK"]
+  tests: ["tests/conformance/test_plugin_hooks.py::test_base_plugin_hooks_exist"]
+- path: "fwgp/dispatcher.py"
+  delivers: ["DEL-CORE-RUNTIME", "DEL-CONFORMANCE"]
+  tests: ["tests/conformance/test_dispatcher_circuit.py::test_circuit_breaker_disables_after_three_failures"]
+- path: "fwgp/watcher.py"
+  delivers: ["DEL-CORE-RUNTIME"]
+  tests: []
+- path: "fwgp/pipeline.py"
+  delivers: ["DEL-CORE-RUNTIME"]
+  tests: []
+- path: "fwgp/schemas/manifest.json"
+  delivers: ["DEL-CONFORMANCE", "DEL-PLUGIN-SDK"]
+  tests: ["tests/conformance/test_manifest_basic.py::test_manifest_has_required_fields"]
+- path: "fwgp/discovery.py"
+  delivers: ["DEL-DISCOVERY"]
+  tests: ["tests/conformance/test_manifest_basic.py::test_manifest_has_required_fields"]
+

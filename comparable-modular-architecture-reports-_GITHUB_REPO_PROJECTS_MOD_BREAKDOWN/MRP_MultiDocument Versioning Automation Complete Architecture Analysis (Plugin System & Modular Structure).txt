@@ -1,0 +1,681 @@
+Multi-Document Versioning Automation: Complete Architecture Analysis (Plugin System & Modular Structure)
+PART A: PLUGIN SYSTEM ARCHITECTURE
+Section A1: PLUGIN SYSTEM OVERVIEW
+A1.1 Architecture Summary
+System Type: Hook-based, workflow-driven (CI events trigger extension logic), contract-first
+Plugin Discovery: Manifest registration (JSON spec files) and convention-based directory scanning for plugin specs; configuration maps (YAML) reference plugin operations
+Loading Strategy: On-demand per CI job step; runtime scripts are invoked as separate tasks or imported within Python processes as needed
+Isolation Level: Mixed
+CI tasks: process-level isolation (separate job/step runs)
+Python plugin logic: same-process within the invoking script
+Communication Pattern: File-contract I/O (JSON/YAML) and CLI invocation; CI events serve as an implicit event bus
+Core-Plugin Boundary:
+Core: validation gates, registry building, immutable tagging, runtime snapshot/ledger, approval rules
+Plugins: extend post-merge processing, propagation, notifications, transforms, and specialized validations
+A1.2 Plugin Lifecycle
+Lifecycle Stages:
+
+Discovery — Spec files (e.g., plugin.spec.json) are located via configured directories or maps; CI config references enabled operations
+Validation — Plugin spec/schema validated; compatibility matrix checks to ensure supported contract/runtime
+Loading — Invoked by CI step or imported by a Python driver with declared entrypoints
+Registration — Operations registered from the spec (name, input/output schemas, capabilities)
+Activation — Triggered by CI events (PR opened/updated; post-merge), or by runtime signal (snapshot complete)
+Deactivation — Process ends at step completion or plugin is unloaded after handler returns
+Cleanup — Temporary files and handles released; failures reported to core
+Lifecycle Events/Hooks:
+
+pre_validate — Fires on PR event before core validation; plugins can add checks
+post_validate — After all core checks pass; plugins can enrich results
+on_registry_built — When doc-registry is produced; plugins can consume registry
+on_doc_changed — When a doc change is detected/qualified; plugins handle downstream effects
+on_tag_created — After immutable tag creation; plugins can publish/notify
+on_runtime_snapshot — When runtime snapshot is captured; plugins can archive/export
+on_error — Emitted on failure; plugins can report/triage
+Section A2: PLUGIN EXTENSION POINTS
+A2.1 Available Hooks/Events
+Hook/Event Name	Trigger Condition	Plugin Receives	Plugin Returns	Can Block?	Examples
+pre_validate	PR opened/updated	change set metadata, front-matter parsed fields	errors/warnings list	Yes	Custom front-matter or lint checks
+post_validate	After core validation passes	validated doc metadata, registry deltas	annotations, advisory notes	No	Docs quality hints
+on_registry_built	Registry built by core	doc-registry content/index	additional index artifacts	No	Cross-ref, impact map
+on_doc_changed	Qualified document change confirmed	{doc_key, semver, status, owner}	actions (propagate, notify, transform)	No	docs.propagate downstream updates
+on_tag_created	Immutable tag pushed	{tag, doc_key, semver, commit_sha}	publication/notification results	No	Release notes, Slack notifications
+on_runtime_snapshot	Runtime snapshot recorded	{snapshot: {doc_key->semver}, run_id}	archiving/export outcomes	No	Store in external CMDB
+on_error	Any core error	error contract payload	triage/issue link	No	File GitHub issue, page duty alert
+A2.2 Hook Priority & Ordering
+Execution Order Control: Not documented in repo artifacts; recommended priority numbers in plugin spec (lower = earlier)
+Default Ordering Strategy: Registration order if priority absent
+Conflict Resolution: Stable sort by priority; ties resolved by plugin name
+Examples:
+
+JSON
+{
+  "name": "docs.propagate",
+  "version": "1.0.0",
+  "operations": [
+    {
+      "hook": "on_doc_changed",
+      "entrypoint": "docs_propagate:handle",
+      "priority": 50
+    }
+  ]
+}
+Section A3: PLUGIN STRUCTURE & ANATOMY
+A3.1 Required Plugin Artifacts
+Mandatory Files:
+plugin.spec.json — Manifest describing hooks, entrypoints, contracts, permissions
+input/output schema files — JSON Schema for operation I/O contracts
+Optional Files:
+rules/*.yml — Mapping rules for propagation/transform
+compatibility.matrix.yaml — Supported core/plugin API ranges
+README.md — Plugin usage/installation
+Directory Structure:
+
+Code
+docs.propagate/
+├── plugin.spec.json              # Operations, hooks, entrypoints, permissions
+├── schemas/
+│   ├── input.schema.json         # Input contract
+│   └── output.schema.json        # Output contract
+├── rules/
+│   └── propagation.map.yml       # Mapping rules
+└── src/
+    └── docs_propagate.py         # Implementation
+(Aligned to artifacts referenced in schema patch summary.)
+
+A3.2 Plugin Manifest/Descriptor
+Manifest Format: JSON
+Required Fields:
+
+JSON
+{
+  "name": "string",
+  "version": "semver",
+  "operations": [
+    {
+      "hook": "string",
+      "entrypoint": "module:function",
+      "input_schema": "path/to/input.schema.json",
+      "output_schema": "path/to/output.schema.json",
+      "priority": 0
+    }
+  ],
+  "permissions": ["read.registry", "write.repo", "network.outbound"],
+  "compatibility": {
+    "core_api": ">=1.0 <2.0",
+    "runtime": ["python3.11"]
+  }
+}
+Example Real Manifest:
+
+⚠️ Not documented / Not found in provided materials
+Inference based on related patterns: Use the above structure for plugin.spec.json as referenced by “plugins/docs.propagate/plugin.spec.json”
+Recommendation: Commit the manifest alongside schemas and rules
+A3.3 Plugin Implementation Pattern
+Implementation Style: Function-based handlers per hook, returning structured actions
+Minimal Plugin Example:
+
+Python
+# src/docs_propagate.py
+def handle(event):
+    # event: {"doc_key": "...", "semver": "...", "status": "...", "owner": "..."}
+    return [
+        {"action": "propagate", "payload": {"targets": ["README", "ARCHITECTURE"], "strategy": "selective"}},
+        {"action": "notify", "payload": {"channel": "docs", "message": f"Updated {event['doc_key']}@{event['semver']}"}}
+    ]
+Full-Featured Plugin Example:
+
+Python
+# src/docs_propagate.py
+import json
+from pathlib import Path
+
+def load_rules(path="rules/propagation.map.yml"):
+    # parse YAML rules (omitted)
+    return {"README": "summary", "ARCHITECTURE": "details"}
+
+def handle(event, context=None):
+    rules = load_rules()
+    actions = []
+    for target, mode in rules.items():
+        actions.append({"action": "propagate", "payload": {"target": target, "mode": mode, "source": event["doc_key"]}})
+    if context and context.get("notify", True):
+        actions.append({"action": "notify", "payload": {"channel": "docs", "message": f"{event['doc_key']} -> {len(actions)} updates"}})
+    return actions
+Section A4: PLUGIN CONTRACTS & INTERFACES
+A4.1 Core Contracts
+Contract: ValidationPlugin
+
+Purpose: Extend/augment core validation on PR events
+Required Methods/Functions:
+
+Python
+validate(change_set: dict, metadata: dict) -> dict  # returns {"errors": [], "warnings": []}
+Input Schema:
+
+JSON
+{
+  "change_set": "list of modified files and diffs",
+  "metadata": {
+    "doc_key": "string",
+    "semver": "string",
+    "status": "string",
+    "owner": "string"
+  }
+}
+Output Schema:
+
+JSON
+{
+  "errors": ["string"],
+  "warnings": ["string"]
+}
+Validation Rules:
+
+Only one document changed in PR
+Required front-matter fields present and valid
+SemVer bump consistent with intent
+Contract: PostMergeTagPlugin
+
+Purpose: React to immutable tag creation
+Python
+on_tag_created(tag: str, doc_key: str, semver: str, commit_sha: str) -> list  # actions (notify, publish)
+Contract: PropagationPlugin
+
+Purpose: Propagate upstream changes to downstream targets
+Python
+handle(event: dict, context: dict | None = None) -> list  # returns list of action dicts
+Example Implementation:
+
+Python
+def validate(change_set, metadata):
+    errs, warns = [], []
+    if len(change_set.get("docs", [])) != 1:
+        errs.append("One-Document Rule violated")
+    if "doc_key" not in metadata:
+        errs.append("Missing doc_key")
+    return {"errors": errs, "warnings": warns}
+A4.2 Communication Protocols
+Plugin → Core:
+
+Emit actions in a structured list (propagate/notify/transform)
+Access core services via CLI/SDK wrappers (registry read, tagging, logging)
+Permission model declared in manifest
+Core → Plugin:
+
+Invoke declared entrypoints with event payloads
+Errors captured; non-blocking except pre_validate
+Timeouts per step; failure reported with error contract
+Plugin → Plugin:
+
+Indirect via events and shared artifacts (registry, tags)
+No direct calls recommended; forward via emitted actions
+Section A5: PLUGIN CAPABILITIES & PERMISSIONS
+A5.1 Permission Model
+Permission Levels:
+read.registry: Read document registry and metadata
+write.repo: Commit changes or open PRs
+network.outbound: Publish/notify to external systems
+Capability Declarations:
+
+JSON
+{
+  "permissions": ["read.registry", "write.repo"],
+  "operations": [{"hook": "on_doc_changed", "entrypoint": "mod:fn"}]
+}
+Restrictions:
+
+❌ No mutation during pre_validate beyond emitting errors/warnings
+❌ No direct tag manipulation; core owns immutable tags
+❌ No secret exfiltration; outbound network gated by policy
+Sandboxing/Isolation:
+
+CI job/container boundaries
+Least-privilege tokens for repo access
+Rate-limited execution; bounded runtime
+A5.2 Core Services Available to Plugins
+Service	Purpose	Access Pattern	Permission Required
+RegistryService	Read doc-registry	CLI/SDK read	read.registry
+TaggingService	Read tags (not create)	CLI/git	read.registry
+RunLedgerService	Append/read runtime snapshots	CLI/SDK	read.registry
+RepoMutationService	Open PRs/update files	CLI/SDK write	write.repo
+NotificationService	Send notifications	Webhook/HTTP	network.outbound
+Section A6: PLUGIN VALIDATION & QUALITY GATES
+A6.1 Pre-Load Validation
+Validation Checks:
+Manifest Schema Validation — Ensures required fields present
+Pass: All required keys and correct types
+Fail: Plugin excluded; error logged
+Compatibility Check — Against compatibility matrix
+Pass: Supported core/runtime versions
+Fail: Plugin skipped with advisory
+Validation Tool/Command:
+
+bash
+python -m jsonschema -i plugins/<name>/plugin.spec.json schemas/plugin.manifest.schema.json
+A6.2 Runtime Safety Mechanisms
+Error Isolation: Plugin failures contained to the step; core continues unless pre_validate
+System Recovery: Non-critical hooks are best-effort; errors annotated
+Error Reporting: Standard error contract published to logs
+Resource Limits:
+Timeouts per step (CI-level)
+Memory/CPU constrained by runner/container
+I/O rate-limited by platform
+Circuit Breakers:
+Auto-disable plugin after N consecutive failures
+Recovery requires green validation on next run
+Section A7: PLUGIN CONFIGURATION & CUSTOMIZATION
+A7.1 Configuration System
+Configuration Sources:
+YAML rule files (e.g., propagation maps)
+Environment variables/secrets in CI
+Repository configuration documents (operating contract)
+Precedence: Env vars > Plugin-level config > Repository defaults
+Hot-reload: No (per-run evaluation)
+Configuration Schema:
+
+JSON
+{
+  "plugin_config": {
+    "notify": { "type": "boolean", "default": true },
+    "targets": { "type": "array", "items": { "type": "string" } }
+  }
+}
+Example Plugin Config:
+
+YAML
+notify: true
+targets:
+  - README
+  - ARCHITECTURE
+A7.2 Plugin-Specific Customization
+Customization Points:
+Rule files controlling downstream targets and strategies
+Hook priorities
+Override Mechanisms:
+Per-branch or per-environment configs via CI variables
+Templates/Scaffolding:
+bash
+# Initialize a new plugin
+mkdir -p plugins/my.plugin/{src,schemas,rules}
+echo '{}' > plugins/my.plugin/plugin.spec.json
+PART B: COMPLETE MODULAR ARCHITECTURE
+Section B1: TIER 1: CORE MODULES (Sacred/Privileged)
+Module 1: CI Validation Orchestrator (docs-guard)
+
+Purpose: Enforce PR-time rules (one-doc rule, front-matter, SemVer, uniqueness, intent)
+Deliverables:
+docs-guard.yml — CI workflow orchestrating validations
+Validation logs and status checks
+Key Contracts:
+Python
+validate_front_matter(doc_path: str) -> dict
+validate_semver(prev: str, next_: str, intent: str) -> bool
+enforce_one_doc_rule(changes: list) -> bool
+Identification: Privileged gate; required for all merges
+Module 2: Front-Matter Schema Validator
+
+Purpose: Parse and validate doc metadata
+Deliverables: Validation results; normalized metadata
+Key Contracts:
+Python
+parse_front_matter(text: str) -> dict
+validate_fields(meta: dict) -> list  # errors
+Module 3: SemVer Analyzer
+
+Purpose: Ensure correct version bump based on intent
+Deliverables: PASS/FAIL; suggested bump
+Key Contracts:
+Python
+compute_bump(intent: str) -> str
+is_valid_bump(prev: str, next_: str, intent: str) -> bool
+Module 4: Doc Key Uniqueness Checker
+
+Purpose: Enforce unique doc_key across repository
+Deliverables: Uniqueness report
+Key Contracts:
+Python
+index_doc_keys(paths: list) -> dict  # {doc_key: [files]}
+assert_unique(index: dict) -> list    # errors
+Module 5: Registry Builder (build_doc_registry.py)
+
+Purpose: Build doc-registry.json index used by other modules
+Deliverables: doc-registry.json; indexes
+Key Contracts:
+Python
+build_registry(root: str) -> dict
+write_registry(registry: dict, out: str) -> None
+Module 6: Tag Orchestrator (doc-tags)
+
+Purpose: Create immutable git tags post-merge
+Deliverables: docs-{doc_key}-{semver} tags pushed
+Key Contracts:
+bash
+git tag "docs-{doc_key}-{semver}" {commit_sha}
+git push origin "docs-{doc_key}-{semver}"
+Module 7: Runtime Policy Snapshot Exporter (get_doc_versions.py)
+
+Purpose: Capture active policy versions at run start
+Deliverables: .runs/{run_id}/metadata.json snapshot
+Key Contracts:
+Python
+collect_active_policies(registry: dict) -> dict
+write_run_snapshot(run_id: str, snapshot: dict) -> None
+Module 8: Run Ledger & Audit
+
+Purpose: Provide append-only audit of snapshots
+Deliverables: Run metadata files; query interface
+Key Contracts:
+Python
+read_run_snapshot(run_id: str) -> dict
+list_runs() -> list
+Module 9: Conventional Commit Intent Checker
+
+Purpose: Validate PR title intent vs version bump
+Deliverables: PASS/FAIL; feedback
+Key Contracts:
+Python
+parse_intent(title: str) -> str  # fix|feat|feat!
+Module 10: Approval Gate Integration
+
+Purpose: Enforce ownership/compliance approvals
+Deliverables: Required reviewers per change type
+Key Contracts:
+Python
+required_approvals(change_type: str) -> list
+Section B2: TIER 2: PLUGIN/EXTENSION MODULES (Extensible/Evolvable)
+Module 11: docs.propagate (proposed)
+
+Purpose: Propagate upstream spec changes to downstream docs
+Deliverables: rules/propagation.map.yml; plugin.spec.json; src handler
+on_doc_changed: Triggers on qualified doc update
+Input Contract:
+JSON
+{ "event": "on_doc_changed", "inputs": { "doc_key": "string", "semver": "string" } }
+Output Contract:
+JSON
+[{ "action": "propagate", "payload": { "targets": ["README"], "strategy": "selective" } }]
+Module 12: notify.slack (example)
+
+Purpose: Notify channels on tag creation
+Deliverables: plugin with webhook config
+on_tag_created: Triggered post-merge
+Input/Output as per hook
+Module 13: transform.renderer (example)
+
+Purpose: Render updated sections/summaries in docs
+on_doc_changed: Produces content patches
+Module 14: compliance.extra_checks (example)
+
+Purpose: Additional regulatory validations
+pre_validate: Can block PR
+Module 15: registry.publisher (example)
+
+Purpose: Publish registry snapshot to external store
+on_registry_built: Exports artifacts
+Module 16: external.sync (example)
+
+Purpose: Sync tags and snapshots to CMDB
+on_runtime_snapshot: Archives state
+Module 17: changelog.generator (example)
+
+Purpose: Generate change notes from versions/intents
+on_tag_created: Writes release notes
+Module 18: doc.linter (example)
+
+Purpose: Enforce wording/style rules
+pre_validate/post_validate: Emits warnings
+Plugin/Extension Identification Criteria:
+
+Optional; can be removed without breaking core
+Implements specific capability via hooks
+User-configurable
+Section B3: TIER 3: SUPPORT MODULES
+Module 19: Operating Contract Docs
+
+Purpose: Define rules/policies (VERSIONING_OPERATING_CONTRACT.md)
+Deliverables: Policy document
+Module 20: Implementation Guides
+
+Purpose: Checklists and summaries for adopters
+Deliverables: IMPLEMENTATION_CHECKLIST.md, IMPLEMENTATION_SUMMARY.md
+Module 21: Architecture Documentation
+
+Purpose: End-to-end blueprint and benefits
+Deliverables: ARCHITECTURE.md
+Module 22: Example Integration
+
+Purpose: Demonstrate API/CLI usage
+Deliverables: example_integration.py
+Module 23: Repository Hygiene
+
+Purpose: Ignore attributes, text normalization
+Deliverables: .gitignore, .gitattributes
+Key Contracts (if applicable):
+
+Text
+N/A (documentation/supporting artifacts)
+Section B4: COMPLETE DELIVERABLES SUMMARY TABLE
+Module	Core Files	Generated Artifacts	Config Files	Tests
+CI Validation Orchestrator	docs-guard.yml	Validation status checks	—	—
+Front-Matter Schema Validator	(part of validation workflow/scripts)	Validation reports	—	—
+SemVer Analyzer	(part of validation workflow/scripts)	PASS/FAIL	—	—
+Doc Key Uniqueness Checker	(part of validation workflow/scripts)	Uniqueness report	—	—
+Registry Builder	build_doc_registry.py	doc-registry.json	—	—
+Tag Orchestrator	doc-tags.yml	docs-{doc_key}-{semver} tags	—	—
+Runtime Snapshot Exporter	get_doc_versions.py	.runs/{run_id}/metadata.json	—	—
+Run Ledger & Audit	(snapshot writer/reader in scripts)	Run snapshots index	—	—
+Intent Checker	(part of validation workflow)	Intent analysis	—	—
+Approval Gate Integration	(platform config/CODEOWNERS behavior)	Approval requirements	—	—
+docs.propagate (proposed)	plugin.spec.json; src handler	Propagation patches	rules/*.yml	—
+notify.slack (example)	plugin.spec.json; src handler	Notifications	env/webhook config	—
+transform.renderer (example)	plugin.spec.json; src handler	Content patches	templates/rules	—
+compliance.extra_checks (example)	plugin.spec.json; src handler	Errors/warnings	policies/*.yml	—
+registry.publisher (example)	plugin.spec.json; src handler	Published snapshot	publisher config	—
+external.sync (example)	plugin.spec.json; src handler	Synced records	endpoint config	—
+changelog.generator (example)	plugin.spec.json; src handler	CHANGELOG entries	templates	—
+doc.linter (example)	plugin.spec.json; src handler	Lint warnings	rules	—
+Operating Contract Docs	VERSIONING_OPERATING_CONTRACT.md	—	—	—
+Implementation Guides	IMPLEMENTATION_CHECKLIST.md; IMPLEMENTATION_SUMMARY.md	—	—	—
+Architecture Documentation	ARCHITECTURE.md	—	—	—
+Example Integration	example_integration.py	—	—	—
+Repository Hygiene	.gitignore; .gitattributes	—	—	—
+Section B5: MODULE DEPENDENCIES
+Code
+[GitHub Actions Orchestrator]
+├── CI Validation Orchestrator (docs-guard)
+│   ├── Front-Matter Schema Validator
+│   ├── SemVer Analyzer
+│   ├── Doc Key Uniqueness Checker
+│   └── Intent Checker
+├── Registry Builder (build_doc_registry.py)
+│   └── Run Ledger & Audit (reads/writes registry/snapshots)
+├── Tag Orchestrator (doc-tags)
+│   └── on_tag_created (plugins)
+└── Runtime Snapshot Exporter (get_doc_versions.py)
+    └── on_runtime_snapshot (plugins)
+
+[Plugin Family]
+├── docs.propagate (on_doc_changed)
+├── notify.slack (on_tag_created)
+├── transform.renderer (on_doc_changed)
+└── others...
+Section B6: INTEGRATION POINTS
+Tool Integrations:
+GitHub Actions — CI orchestration (validation and tagging workflows)
+Git (tags) — Immutable snapshot creation
+Conventional Commits — PR title intent
+Data Flows
+PR Validation → Developer opens PR → CI parses front-matter → Validate SemVer + uniqueness → Build registry (if needed) → PASS/FAIL checks
+
+Post-Merge Tagging → Merge to main → Detect changed documents → Extract doc_key + semver → Create and push tag → Fire on_tag_created hooks
+
+Runtime Snapshot → Pipeline starts → Read registry → Collect active policies → Write .runs/{run_id}/metadata.json → Execute tasks deterministically
+
+Real examples from system docs:
+
+Policy Snapshot JSON:
+
+JSON
+{
+  "OC_CORE": "1.3.1",
+  "PIPELINE_POLICY": "2.1.0"
+}
+ASCII Workflow (excerpt):
+
+Code
+Create Git Tag
+docs-OC_CORE-1.3.1  ← Immutable snapshot
+Push Tag to Remote
+Rollback command (excerpt):
+
+bash
+git checkout docs-OC_CORE-1.3.1
+PART C: PLUGIN ECOSYSTEM & DEVELOPMENT
+Section C1: PLUGIN DEVELOPMENT WORKFLOW
+C1.1 Plugin Creation Process
+Create plugin folder with spec, schemas, and src implementation
+Define operations mapped to hooks with entrypoints and priorities
+Add configuration/rules and update compatibility matrix
+Register plugin in CI or repository config so hooks are invoked
+Tools Required:
+
+Python 3.x — Implementation
+JSON/YAML tooling — Schemas and rules
+Scaffolding:
+
+bash
+mkdir -p plugins/my.plugin/{src,schemas,rules}
+cat > plugins/my.plugin/plugin.spec.json <<'JSON'
+{ "name": "my.plugin", "version": "0.1.0", "operations": [] }
+JSON
+C1.2 Testing & Debugging
+Testing Framework: pytest (recommended)
+Test runner integration: Run locally or as CI job
+Mock/stub: Simulate event payloads and registry
+Test Example:
+
+Python
+from my_plugin.src.handler import handle
+
+def test_handle_propagates():
+    event = {"doc_key": "OC_CORE", "semver": "1.3.1", "status": "active", "owner": "Platform.Engineering"}
+    out = handle(event)
+    assert any(a["action"] == "propagate" for a in out)
+Section C2: PLUGIN ECOSYSTEM
+C2.1 Official/Built-in Plugins
+Plugin Name	Purpose	Hooks Used	Stability
+docs-guard	PR-time validation	pre_validate	Stable
+doc-tags	Immutable tagging	on_doc_changed → tag	Stable
+(Represented as workflows and core steps.)
+
+C2.2 Third-Party Plugin Support
+Distribution Channels: Repository subfolders or separate repositories
+Installation: Add plugin folder and register entrypoints/hooks in CI config
+Community Resources: Architecture and implementation guides within repo
+Section C3: VERSIONING & COMPATIBILITY
+Version Strategy: SemVer for documents and plugin APIs
+Breaking change policy: Major version increments; compatibility matrix governs support
+Deprecation: Grace periods with warnings before removal
+Compatibility Matrix:
+
+Declared via a compatibility matrix file for plugins (recommended)
+PART D: ARCHITECTURAL ANALYSIS
+Section D1: PLUGIN ARCHITECTURE STRENGTHS & WEAKNESSES
+D1.1 Architectural Strengths
+✅ Immutable Tagging
+
+Why: Guarantees deterministic rollback
+Example: docs-{doc_key}-{semver} tags
+✅ Contract-First Validation
+
+Why: Enforces front-matter and SemVer correctness
+Example: One-Document Rule and schema checks
+✅ Runtime Auditability
+
+Why: Snapshots capture active policies per run
+Example: .runs/{run_id}/metadata.json
+D1.2 Architectural Limitations
+⚠️ Plugin Manifest Standard Not Materialized
+
+Why: Spec examples referenced but not committed
+Workaround: Adopt proposed JSON spec and schemas
+⚠️ Ordering/Priority Semantics Not Documented
+
+Why: No canonical rule in repo
+Workaround: Add priority to manifest and stable sorting in loader
+⚠️ Test Coverage for Plugins Not Evident
+
+Why: No tests present
+Workaround: Introduce pytest suite and CI jobs
+D1.3 Design Tradeoffs
+Flexibility vs. Performance: Event-driven steps slightly increase CI time but isolate failures
+Safety vs. Capability: Immutable tags and validation restrict direct mutations; plugins rely on core services
+Simplicity vs. Power: File-based contracts are simple to adopt; advanced plugin orchestration requires manifest standardization
+Section D2: COMPARATIVE METRICS
+D2.1 Plugin System Characteristics
+Characteristic	Rating (1-5)	Notes
+Ease of Plugin Creation	⭐⭐⭐⭐☆	Simple function handlers; needs spec standard
+Extensibility Breadth	⭐⭐⭐⭐☆	Multiple hooks across PR/post-merge/runtime
+Safety/Isolation	⭐⭐⭐⭐⭐	CI/job isolation; immutable tags
+Performance Overhead	⭐⭐⭐⭐☆	Additional steps; acceptable for docs
+Documentation Quality	⭐⭐⭐⭐⭐	Strong architecture and operating contract docs
+Developer Experience	⭐⭐⭐⭐☆	Clear flows; add scaffolds/tests to improve
+Plugin Ecosystem Size	⭐⭐☆☆☆	Proposed plugins; ecosystem to be grown
+D2.2 Complexity Analysis
+Lines of Code for "Hello World" Plugin: ~20–40
+Number of Required Artifacts: 2–4 (spec, handler, schemas)
+Number of Extension Points: 6–7 (as listed)
+Learning Curve: Beginner → Intermediate
+Time to First Plugin: ~2–4 hours
+Section D3: MODULAR ARCHITECTURE QUALITY ASSESSMENT
+This modular architecture ensures:
+
+✅ Clear separation of concerns
+✅ Each module has single responsibility
+✅ Core protected from plugin failures
+✅ Extensibility without core changes
+✅ Complete audit/observability capability
+✅ Deterministic and testable behavior
+⚠️ Well-defined module boundaries (plugins need formal spec)
+✅ Manageable dependencies (no circular deps evident)
+⚠️ Consistent interface contracts (documented, not codified)
+✅ Scalable architecture for growth
+Section D4: KEY TAKEAWAYS & PATTERNS
+D4.1 Core Architectural Patterns
+Immutable Snapshotting via Git Tags
+
+Description: Tag per doc_key+semver
+Benefits: Deterministic rollback, auditability
+Trade-offs: Tag namespace management
+Contract-Driven Validation
+
+Description: Front-matter schema + SemVer intent
+Benefits: Predictable, automatable checks
+Trade-offs: Requires discipline in metadata
+Event/Hook-Oriented Extension
+
+Description: Hooks at PR, post-merge, runtime
+Benefits: Clear extension points
+Trade-offs: Requires manifest to coordinate order/compat
+D4.2 Reusable Design Decisions
+✅ One-Document Rule — Improves change isolation and traceability
+✅ Runtime Snapshots — Auditable, reproducible pipelines
+✅ Conventional Commits for Intent — Encodes change semantics into workflow
+Decisions to Avoid:
+
+❌ Implicit Plugin Loading — Prefer explicit manifests and compatibility gates
+❌ Direct Tag Mutation by Plugins — Keep core authoritative
+Section D5: CROSS-SYSTEM COMPARISON MATRIX
+Aspect	System A	System B	System C
+Discovery Method	Manifest	—	—
+Loading Strategy	On-demand	—	—
+Isolation Level	Mixed	—	—
+Extension Points	6–7	—	—
+Permission Model	Declarative	—	—
+Plugin Language	Python	—	—
+Validation Approach	Contract	—	—
+Configuration System	YAML/JSON	—	—
+Core Modules	~10	—	—
+Plugin Modules	1+	—	—
+Developer Tools	Python/CI	—	—
+Ecosystem Size	Growing	—	—

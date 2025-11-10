@@ -1,0 +1,46 @@
+name: Validate Manifests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate plugin manifests
+        run: |
+          python - <<'PY'
+          import json, sys, glob
+          required = {"name", "module", "class", "version"}
+          manifests = glob.glob("plugins/**/manifest.json", recursive=True)
+          if not manifests:
+              print("No manifests found under plugins/**/manifest.json")
+              sys.exit(0)
+          errors = 0
+          for m in manifests:
+              try:
+                  with open(m, "r", encoding="utf-8") as fh:
+                      data = json.load(fh)
+                  missing = required - set(data.keys())
+                  if missing:
+                      print(f"{m}: missing fields: {', '.join(sorted(missing))}")
+                      errors += 1
+              except Exception as e:
+                  print(f"{m}: invalid JSON or unreadable: {e}")
+                  errors += 1
+          if errors:
+              print(f"Manifest validation failed with {errors} error(s)")
+              sys.exit(1)
+          print("All manifests valid")
+          PY
+

@@ -1,0 +1,29 @@
+id: DEL-CONFORMANCE
+purpose: "Ensure plugins and runtime meet minimum behavior/contracts"
+interfaces:
+  consumes: ["FWGP_MANIFEST_V1"]
+  produces: ["CONFORMANCE_REPORT_V1"]
+acceptance:
+  - id: AC-CONF-1
+    gherkin: |
+      Feature: Manifest validation
+        Scenario: Manifest has required fields
+          Given a plugin manifest
+          Then it includes name, version, module, and class
+  - id: AC-CONF-2
+    gherkin: |
+      Feature: Circuit breaker
+        Scenario: Plugin times out repeatedly
+          Given a plugin that sleeps longer than timeout
+          When invoked 3 times
+          Then it becomes disabled in the state store
+evidence:
+  tests:
+    - "tests/conformance/test_manifest_basic.py::test_manifest_has_required_fields"
+    - "tests/conformance/test_dispatcher_circuit.py::test_circuit_breaker_disables_after_three_failures"
+files_required:
+  - "fwgp/schemas/manifest.json"
+  - "fwgp/discovery.py"
+  - "fwgp/state.py"
+owners: ["quality"]
+

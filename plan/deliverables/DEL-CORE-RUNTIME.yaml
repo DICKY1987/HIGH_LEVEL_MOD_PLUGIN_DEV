@@ -1,0 +1,24 @@
+id: DEL-CORE-RUNTIME
+purpose: "Detect file changes and execute Git pipeline with plugins"
+interfaces:
+  consumes: ["FWGP_HOOKS_V1", "GIT_CLI_V1"]
+  produces: ["STRUCTURED_LOG_V1"]
+acceptance:
+  - id: AC-CORE-1
+    gherkin: |
+      Feature: Stage/Commit/Push
+        Scenario: Modify a file
+          Given a repo with remote and branch
+          When a file is modified in the working tree
+          Then the change is staged and committed with a generated message
+          And a push is attempted to the configured remote/branch
+evidence:
+  tests:
+    - "tests/conformance/test_plugin_hooks.py::test_end_to_end_no_plugins"
+files_required:
+  - "fwgp/watcher.py"
+  - "fwgp/pipeline.py"
+  - "fwgp/dispatcher.py"
+  - "fwgp/git_adapter.py"
+owners: ["runtime"]
+

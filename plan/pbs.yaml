@@ -1,0 +1,20 @@
+products:
+  - id: DEL-CORE-RUNTIME
+    name: "FWGP Core Runtime (watcher/dispatcher/pipeline/git)"
+  - id: DEL-PLUGIN-SDK
+    name: "Plugin SDK (base, events, contracts)"
+  - id: DEL-PLUGIN-TEMPLATES
+    name: "Five Modular Plugin Templates"
+  - id: DEL-CONFORMANCE
+    name: "Conformance Test Harness (L0–L2)"
+  - id: DEL-TUI
+    name: "Interactive TUI (configure and run)"
+  - id: DEL-DISCOVERY
+    name: "Manifest Discovery (plugins/**/manifest.json)"
+  - id: DEL-OBS
+    name: "Observability (logs, basic metrics)"
+  - id: DEL-CI
+    name: "CI Gates (static/unit/behavior placeholders)"
+  - id: DEL-DOCS
+    name: "Docs (README, usage, plan)"
+

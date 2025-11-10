@@ -1,0 +1,28 @@
+name: FWGP_HOOKS_V1
+summary: "Standard FWGP hook names and payload shapes"
+hooks:
+  - name: onFileDetected
+    payload: {path: string, changeType: enum[created, modified, deleted], ts: number, repo: string}
+  - name: beforeStage
+    payload: {paths: string[], repo: string, ctx: object}
+    returns: {allow: boolean, reasons?: string[]}
+  - name: afterStage
+    payload: {paths: string[], repo: string}
+  - name: beforeCommit
+    payload: {stagedSummary: string[], repo: string, author?: string}
+    returns: {allow: boolean, messageOverride?: string, sign?: boolean}
+  - name: afterCommit
+    payload: {commitSha?: string}
+  - name: beforePush
+    payload: {remote: string, branch: string}
+    returns: {allow: boolean, force?: boolean}
+  - name: afterPush
+    payload: {remote: string, branch: string}
+  - name: beforePull
+    payload: {remote: string, branch: string}
+    returns: {allow: boolean, strategy?: string}
+  - name: afterPull
+    payload: {updated: boolean, conflicts?: string[]}
+  - name: onConflict
+    payload: {files: string[]}
+

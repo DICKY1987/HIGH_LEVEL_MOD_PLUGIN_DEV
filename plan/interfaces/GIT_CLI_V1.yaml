@@ -1,0 +1,19 @@
+name: GIT_CLI_V1
+summary: "CLI commands used by FWGP"
+commands:
+  - name: init
+    args: []
+  - name: remote set-url|add
+    args: [name, url]
+  - name: checkout
+    args: [branch]
+  - name: add
+    args: [--, paths]
+  - name: diff --cached --name-only
+    returns: [filepaths]
+  - name: commit -m <message> [-S]
+  - name: push <remote> <branch> [--force-with-lease]
+  - name: pull <remote> <branch>
+  - name: diff --name-only --diff-filter=U
+    returns: [filepaths]
+

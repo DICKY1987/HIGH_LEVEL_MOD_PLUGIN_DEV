@@ -1,0 +1,20 @@
+id: DEL-PLUGIN-SDK
+purpose: "Provide base classes and event contracts for plugins"
+interfaces:
+  consumes: []
+  produces: ["FWGP_HOOKS_V1", "FWGP_MANIFEST_V1"]
+acceptance:
+  - id: AC-SDK-1
+    gherkin: |
+      Feature: Hook contracts
+        Scenario: Default plugin implementations
+          Given a subclass of BasePlugin
+          Then all hook methods exist and can be called without error
+evidence:
+  tests:
+    - "tests/conformance/test_plugin_hooks.py::test_base_plugin_hooks_exist"
+files_required:
+  - "fwgp/plugins/base.py"
+  - "fwgp/events.py"
+owners: ["sdk"]
+

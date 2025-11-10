@@ -1,0 +1,1859 @@
+AI Upkeep Suite v2 (Guardrails + MCP): Complete Architecture Analysis (Plugin System & Modular Structure)
+Current System README.md
+AI‑Assisted Code Quality Enforcement System
+
+This repository implements the AIUOKEEP reference architecture: a deterministic,
+policy‑driven guardrail platform that mediates AI‑generated code changes through
+MCP tooling, SafePatch validation, and audit governance.
+
+Table of Contents
+
+Overview
+
+Architecture
+
+Getting Started
+
+Operational Workflows
+
+Repository Layout
+
+Documentation
+
+Contributing
+
+Overview
+
+The system enables autonomous agents and developers to collaborate safely by
+combining:
+
+Model Context Protocol (MCP) servers that expose language‑specific quality
+tooling and shared services.
+
+SafePatch validation pipeline that runs formatting, linting, typing,
+testing, SAST, policy, and secret gates.
+
+Policy and schema guardrails that enforce deterministic ChangePlans and
+block disallowed operations.
+
+Audit and observability features that capture immutable records for every
+validation run.
+
+Architecture
+
+A detailed component breakdown, data flow, and operational considerations are
+available in docs/ARCHITECTURE.md
+.
+
+Key elements:
+
+MCP Tool Plane: Configured via /.mcp/ scripts and /mcp-servers/ runtime
+implementations.
+
+Guardrails: JSON Schemas, OPA policies, and Semgrep rule packs defined under
+/policy/ and /.semgrep/
+github.com
+.
+
+SafePatch Pipeline: Validation orchestration script at
+scripts/validation/Invoke‑SafePatchValidation.ps1 with CI parity through
+/.github/workflows/
+github.com
+.
+
+Audit Layer: Ledger schema in /schemas/ledger.schema.json and PowerShell
+utilities under /scripts/audit/
+github.com
+.
+
+Getting Started
+
+Install Dependencies
+
+PowerShell 7.4+
+
+Python 3.12+
+
+Node.js (for TypeScript tooling)
+
+Clone Repository and review configuration files in /.mcp/.
+
+Initialize MCP Environment via ./.mcp/Initialize‑McpEnvironment.ps1 and
+validate using ./.mcp/Test‑McpEnvironment.ps1
+github.com
+.
+
+Run Local Validation with ./tools/Verify.ps1 before submitting changes.
+
+Review Guardrails in docs/GUARDRAILS.md to understand enforced policies
+github.com
+.
+
+Operational Workflows
+
+Developers/Agents author ChangePlans, apply deterministic patches, and run
+SafePatch locally before creating PRs.
+
+CI/CD executes workflows in /.github/workflows/ to mirror local checks and
+publish ledger entries
+github.com
+.
+
+Governance Teams monitor /scripts/audit/Export‑WeeklyReport.ps1 outputs to
+detect drift or recurring failures
+github.com
+.
+
+Repository Layout
+
+.mcp/ — Desired‑state configuration and automation scripts for MCP servers
+github.com
+.
+
+mcp‑servers/ — MCP server implementations (PowerShell, Python, SAST, secrets,
+policy)
+github.com
+.
+
+policy/ — JSON Schemas, OPA policies, and Semgrep configurations
+github.com
+.
+
+tools/ — Local development tooling, including edit‑engine utilities and
+validation orchestrators.
+
+scripts/ — Validation, audit, sandbox, and hook scripts.
+
+docs/ — Architecture, guardrail, MCP integration, validation pipeline, agent
+guidelines, and troubleshooting references
+github.com
+.
+
+tests/ — Fixtures and test suites supporting SafePatch enforcement.
+
+Documentation
+
+Additional guidance is available in:
+
+docs/MCP_INTEGRATION.md
+: Configure and operate MCP
+servers
+github.com
+.
+
+docs/VALIDATION_PIPELINE.md
+: Understand
+SafePatch stages
+github.com
+.
+
+docs/AGENT_GUIDELINES.md
+: Behavioral standards for
+agents
+github.com
+.
+
+docs/TROUBLESHOOTING.md
+: Common issues and fixes.
+
+docs/GUARDRAILS.md
+: Guardrail taxonomy and extensions
+github.com
+.
+
+Contributing
+
+See CONTRIBUTING.md
+ for branching strategy, code review
+requirements, and validation expectations. All contributions must pass SafePatch
+validation and include relevant documentation updates.
+
+PART A: PLUGIN SYSTEM ARCHITECTURE
+Section A1: PLUGIN SYSTEM OVERVIEW
+A1.1 Architecture Summary
+
+System Type: Service‑oriented plugin architecture layered over deterministic quality gates.
+The core exposes a Model Context Protocol (MCP) tool plane where each plugin is an MCP server that encapsulates a class of tools (formatter, linter, test, SAST, secrets, policy). LLMs and agents call these services through a proxy and cannot invoke raw commands, enforcing separation of concerns
+github.com
+.
+
+Plugin Discovery: Plugins are registered declaratively in mcp_servers.json within the .mcp/ folder. This JSON manifest lists server IDs and the underlying commands used to launch them
+github.com
+. Agents query the control plane via GET /v1/mcp/tools, which returns only approved tools based on the caller’s access group
+github.com
+.
+
+Loading Strategy: MCP servers run as external processes launched by the orchestrator. Initialization scripts (Initialize‑McpEnvironment.ps1) read the manifest, merge with current state, and start each server
+github.com
+. Tools are loaded on demand; the SafePatch pipeline calls servers only when a stage executes (formatting, linting, etc.)
+github.com
+.
+
+Isolation Level: Each MCP server runs as a separate OS process. Validation stages execute within ephemeral sandboxes (network‑isolated namespaces on Linux and firewall‑restricted sessions on Windows) to limit blast radius
+github.com
+github.com
+. Thus, plugins are isolated at process level and cannot access network resources
+github.com
+.
+
+Communication Pattern: Agents send ChangePlan JSON and unified diffs to a proxy, which forwards calls to MCP servers through a REST‑like API (/v1/mcp/<tool>). The proxy collects results and feeds them back to the model
+github.com
+. Within the SafePatch pipeline, orchestrators call MCP servers via local CLI commands defined in mcp_servers.json.
+
+Core‑Plugin Boundary: The core controls the overall workflow, enforcing guardrail schemas, policies, and sequencing. Plugins implement specific quality tasks (formatting, linting, type‑checking, testing, SAST, secrets, policy evaluation). Plugins cannot alter the control flow; they merely return pass/fail data and diagnostics. The core decides whether to continue or block based on aggregated results
+github.com
+.
+
+A1.2 Plugin Lifecycle
+
+Lifecycle Stages:
+
+Discovery — The orchestrator reads mcp_servers.json to discover available MCP servers and supported tools
+github.com
+. The proxy exposes these tools via GET /v1/mcp/tools, filtered by access group
+github.com
+.
+
+Validation — Test‑McpEnvironment.ps1 checks that each configured server is reachable and healthy
+github.com
+; changeplan.schema.json and unifieddiff.schema.json validate the shape of incoming ChangePlans and diffs
+github.com
+.
+
+Loading — During initialization (Initialize‑McpEnvironment.ps1), server processes are started according to their manifest definitions
+github.com
+. If a server fails to start, the environment fails validation.
+
+Registration — Each server advertises its tools (e.g., code.format.python, code.lint.python) back to the proxy. The proxy caches tool metadata and associates them with access groups
+github.com
+.
+
+Activation — When the SafePatch pipeline reaches a stage (formatting, linting, etc.), it sends the relevant artifact to the matching MCP server. The server runs the underlying tool (black, ruff, PSScriptAnalyzer, mypy, pytest, Semgrep, gitleaks, conftest) and returns structured results
+github.com
+.
+
+Deactivation — After completion or when the orchestrator shuts down, server processes are terminated. There is no dynamic unloading at runtime; servers persist for the session.
+
+Cleanup — Sandbox scripts (Remove‑EphemeralWorkspace.ps1) tear down workspaces and restore firewall rules. Audit scripts record results to the ledger
+github.com
+.
+
+Lifecycle Events/Hooks:
+
+onDiscover – Triggered when the manifest is loaded; plugins can validate configuration and report capabilities.
+
+preValidate – Called before running any tool; schemas and policies verify ChangePlan and diff integrity
+github.com
+.
+
+onFormat – Fires during the formatting stage; plugins receive file tree, apply formatting, and return diff or pass/fail
+github.com
+.
+
+onLint – Triggered during linting; plugins run language‑specific linters and return diagnostics
+github.com
+.
+
+onTypeCheck – Runs static type analysis for supported languages
+github.com
+.
+
+onTest – Executes unit tests in an isolated workspace
+github.com
+.
+
+onSAST – Launches Semgrep scans and returns vulnerability findings
+github.com
+.
+
+onPolicy – Invokes OPA/Conftest policies to enforce organizational rules
+github.com
+.
+
+onSecret – Runs secret scanners (e.g., gitleaks) to detect sensitive data
+github.com
+.
+
+postCleanup – Cleans up temporary workspaces and emits audit records
+github.com
+.
+
+Section A2: PLUGIN EXTENSION POINTS
+A2.1 Available Hooks/Events
+Hook/Event Name	Trigger Condition	Plugin Receives	Plugin Returns	Can Block?	Examples
+onDiscover	When Initialize‑McpEnvironment.ps1 reads mcp_servers.json	Server ID, command, args	Confirmation (OK/error)	Yes	Checking that a Python interpreter exists before starting quality_mcp.py
+onFormat	Start of formatting stage	Workspace path, diff context	Pass/fail status and reformatted diff	Yes	Running black and ruff format on Python files
+github.com
+
+onLint	Linting stage of SafePatch	Source files	Diagnostics list	Yes	Running PSScriptAnalyzer, ruff lint rules, ESLint
+github.com
+
+onTypeCheck	Type‑checking stage	Source tree	Type check results	Yes	Running mypy and tsc --noEmit
+github.com
+
+onTest	Unit testing stage	Isolated workspace & tests	Test pass/fail summary	Yes	Running Invoke‑Pester or pytest with coverage
+github.com
+
+onSAST	SAST stage	Workspace path	List of security findings	Yes	Running Semgrep rule packs
+github.com
+
+onPolicy	Policy evaluation stage	ChangePlan & diff metadata	Policy decision (allow/deny, reasons)	Yes	Running OPA policy checks for forbidden APIs
+github.com
+
+onSecret	Secret scanning stage	Workspace path	Secret detection results	Yes	Running gitleaks via secrets MCP server
+github.com
+
+postCleanup	After all stages finish	Results & artifacts	Ledger entry & cleanup confirmation	No	Writing JSONL ledger entry and deleting sandbox
+github.com
+A2.2 Hook Priority & Ordering
+
+Execution Order Control:
+Hooks are executed in a fixed sequence defined by the SafePatch pipeline: formatting → linting → type checking → testing → SAST → policy → secrets
+github.com
+. Plugins do not specify custom priorities; the pipeline strictly orders stages to ensure deterministic results.
+If a plugin returns a blocking error, subsequent hooks are short‑circuited and the pipeline halts.
+
+Default Ordering Strategy:
+
+All onFormat hooks across languages run first.
+
+On success, onLint hooks run for each language.
+
+Then onTypeCheck, onTest, onSAST, onPolicy, and onSecret hooks execute.
+
+postCleanup always runs, regardless of intermediate failures, to ensure audit entries are recorded and sandboxes removed.
+
+Conflict Resolution:
+Because each stage calls a single MCP server per language, there is no direct conflict between multiple plugins. If multiple servers implement the same hook (e.g., two SAST scanners), the orchestrator can sequence them by listing them separately in mcp_servers.json. Failures in any SAST plugin block the pipeline.
+
+Example (setting ordering):
+
+# Invoke‑SafePatchValidation.ps1 (excerpt)
+$stages = @( 'format', 'lint', 'type', 'test', 'sast', 'policy', 'secrets' )
+foreach ($stage in $stages) {
+  foreach ($server in $McpConfig.tools[$stage]) {
+    Invoke-McpTool -Server $server -Stage $stage -Workspace $workspace
+    if ($LASTEXITCODE -ne 0) { throw "Stage $stage failed" }
+  }
+}
+
+Section A3: PLUGIN STRUCTURE & ANATOMY
+A3.1 Required Plugin Artifacts
+
+Mandatory Files:
+
+ps_quality_mcp.ps1 / quality_mcp.py – MCP server scripts exposing language‑specific tools (formatters, linters, type checkers, test runners)【534425661420665†L515-L509】.
+
+mcp_servers.json – Manifest mapping server IDs to process commands and arguments
+github.com
+.
+
+Access group definitions (access_groups.json) – Describes which roles can invoke which tools
+github.com
+.
+
+Optional Files:
+
+Server‑specific configuration files (e.g., ruff.toml, mypy.ini, .eslintrc.json) – Provide fine‑tuned linting rules used by the plugin.
+
+Schema and policy definitions – Additional JSON Schemas and OPA policies to extend guardrails.
+
+Directory Structure:
+
+[mcp-servers]/
+├── powershell/
+│   └── ps_quality_mcp.ps1     # Exposes formatting, linting, testing tools for PowerShell
+├── python/
+│   └── quality_mcp.py         # Exposes ruff, black, mypy, pytest
+├── sast/
+│   └── semgrep_mcp.py         # Wraps Semgrep SAST scans
+├── secrets/
+│   └── secrets_mcp.py         # Wraps secret scanners (e.g., gitleaks)
+└── policy/
+    └── policy_mcp.py          # Wraps OPA/Conftest policy evaluation
+
+.mcp/
+├── mcp_servers.json           # Declares servers and commands
+├── access_groups.json         # Maps roles to allowed tools
+├── Initialize-McpEnvironment.ps1
+├── Test-McpEnvironment.ps1
+├── Get-DesiredStateConfiguration.ps1
+├── New-McpConfigurationObject.ps1
+└── Set-McpConfiguration.ps1
+
+A3.2 Plugin Manifest/Descriptor
+
+Manifest Format: The manifest is a JSON file (mcp_servers.json) with two top‑level keys: servers and tools. Each entry defines the process type, command, and arguments for an MCP server
+github.com
+.
+
+Required Fields:
+
+{
+  "servers": {
+    "<server_id>": {
+      "type": "process",      // execution type (process, container, etc.)
+      "cmd": "<executable>",   // executable to launch
+      "args": ["<arg1>", "<arg2>"] // arguments passed to the executable
+    },
+    ...
+  },
+  "tools": {
+    "run_command_in_terminal": false  // global option controlling interactive tools
+  }
+}
+
+
+Example Real Manifest: (excerpt from mcp_servers.json)
+
+{
+  "servers": {
+    "powershell-quality": {
+      "type": "process", 
+      "cmd": "pwsh", 
+      "args": ["-File", "./tools/ps_quality_mcp.ps1"]
+    },
+    "python-quality": {
+      "type": "process", 
+      "cmd": "python", 
+      "args": ["-m", "quality_mcp"]
+    },
+    "semgrep": {
+      "type": "process", "cmd": "semgrep", "args": ["mcp"]
+    },
+    "policy": {
+      "type": "process", "cmd": "conftest", "args": ["mcp"]
+    },
+    "secrets": {
+      "type": "process", "cmd": "gitleaks", "args": ["mcp"]
+    }
+  },
+  "tools": {"run_command_in_terminal": false}
+}
+
+A3.3 Plugin Implementation Pattern
+
+Implementation Style: Mixed. PowerShell plugins are function‑based scripts exposing functions that implement formatting, linting, testing, and diff application. Python plugins are module‑based, exporting functions or classes to wrap tools like ruff and pytest. All plugins follow a deterministic pattern: read input from STDIN or file, run the underlying tool, and serialize results as JSON.
+
+Minimal Plugin Example (Python): A simple MCP server exposing a single formatter.
+
+# quality_mcp.py (simplified)
+import subprocess, json, sys
+
+def format_python(path: str) -> dict:
+    # run black formatter in check mode
+    result = subprocess.run(["black", "--diff", "--quiet", path], capture_output=True, text=True)
+    return {"changed": bool(result.stdout), "diff": result.stdout}
+
+if __name__ == "__main__":
+    # read JSON request from stdin
+    request = json.load(sys.stdin)
+    action = request["action"]
+    if action == "format":
+        resp = format_python(request["path"])
+        print(json.dumps(resp))
+
+
+Full‑Featured Plugin Example (PowerShell): A PowerShell server exposing multiple hooks.
+
+# ps_quality_mcp.ps1 (simplified)
+param([Parameter(ValueFromPipeline)][string]$InputObject)
+
+function Invoke-Format {
+    param([string]$Path)
+    # call PSScriptAnalyzer in formatting mode
+    $result = Invoke-ScriptAnalyzer -Path $Path -Fix -ErrorAction SilentlyContinue
+    return @{ changed = ($result -ne $null); diff = $result }
+}
+
+function Invoke-Lint {
+    param([string]$Path)
+    $findings = Invoke-ScriptAnalyzer -Path $Path -Recurse -Severity Error
+    return @{ ok = ($findings.Count -eq 0); diagnostics = $findings }
+}
+
+function Invoke-Test {
+    param([string]$Path)
+    $outcome = Invoke-Pester -Path $Path -PassThru
+    return @{ passed = ($outcome.FailedCount -eq 0); summary = $outcome }
+}
+
+# dispatch based on incoming JSON
+$req = $InputObject | ConvertFrom-Json
+switch ($req.action) {
+  'format' { $res = Invoke-Format -Path $req.path }
+  'lint'   { $res = Invoke-Lint   -Path $req.path }
+  'test'   { $res = Invoke-Test   -Path $req.testsPath }
+  default  { throw "Unknown action $($req.action)" }
+}
+$res | ConvertTo-Json -Depth 5
+
+Section A4: PLUGIN CONTRACTS & INTERFACES
+A4.1 Core Contracts
+
+The system defines several core interfaces that plugins must adhere to. Below are representative contracts.
+
+Contract: ChangePlan Schema
+
+Purpose: Defines the required structure of a model’s output before any tool execution. It ensures that agents propose work items and diffs rather than directly modifying files
+github.com
+.
+
+Required Fields (JSON Schema):
+
+{
+  "repo":        "string",           // repository identifier
+  "rationale":   "string (≤800)",    // explanation of change
+  "risk":        "enum(low, medium, high)",
+  "gates":       "array<string>",    // stages to run (e.g., format, lint)
+  "changes": [
+    {
+      "path": "string",             // relative file path
+      "diff": "string"              // unified diff fragment:contentReference[oaicite:55]{index=55}
+    }
+  ],
+  "tests": ["string"]              // list of test names or identifiers:contentReference[oaicite:56]{index=56}
+}
+
+
+Validation Rules:
+
+repo must not be empty
+github.com
+.
+
+At least one change must be present
+github.com
+.
+
+Paths must be relative (no leading slash)
+github.com
+.
+
+gates array must exist and contain only allowed stage names
+github.com
+.
+
+Contract: UnifiedDiff Guard
+
+Purpose: Ensures that patch submissions are standard unified diffs and forbid forbidden files
+github.com
+.
+
+Patch must apply cleanly using apply_patch.ps1.
+
+File additions allowed only in src/ or tests/ directories.
+
+Binary files, secrets, and lockfiles are prohibited.
+
+Contract: MCP Server Interface
+
+Purpose: Describes how plugins communicate with the core via the proxy.
+
+{
+  "action":   "string",   // one of: format, lint, type, test, sast, policy, secrets
+  "path":     "string",   // path to workspace or test suite
+  "options":  { ... }      // tool-specific options
+}
+
+
+The server must return a JSON object indicating success/failure and any diagnostics. Example for a SAST scan:
+
+{
+  "findings": [ { "id": "ps-avoid-write-host", "message": "Use Write-Output", ... } ],
+  "passed": false
+}
+
+
+Input Schema: See the ChangePlan schema above for high‑level planning; individual MCP calls add specific keys like path, testsPath, or diff.
+
+Output Schema: Each plugin defines its own result format, but common keys include passed/ok, changed, diff, diagnostics, findings, and summary.
+
+Example Implementation: See the full‑featured PowerShell plugin example above.
+
+Contract: Validation Orchestrator (Invoke‑SafePatchValidation.ps1)
+
+Purpose: Central orchestrator that enforces the sequence of hooks and aggregates results.
+
+Key Methods:
+
+function Invoke-Stage {
+  param(
+    [string]$Stage,
+    [string]$Workspace,
+    [string[]]$Servers
+  )
+  foreach ($server in $Servers) {
+    Invoke-McpTool -Server $server -Stage $Stage -Workspace $Workspace
+    if ($LASTEXITCODE -ne 0) { throw "Stage $Stage failed" }
+  }
+}
+
+function Invoke-SafePatchValidation {
+  param([ChangePlan]$Plan)
+  Test-ChangePlan -Plan $Plan
+  $workspace = New-EphemeralWorkspace -Repo $Plan.repo
+  Apply-Patches -Changes $Plan.changes
+  foreach ($stage in $Plan.gates) {
+    Invoke-Stage -Stage $stage -Workspace $workspace -Servers $McpConfig.tools[$stage]
+  }
+  Write-RunLedgerEntry -Plan $Plan -Result $Result
+  Remove-EphemeralWorkspace -Workspace $workspace
+}
+
+A4.2 Communication Protocols
+
+Plugin → Core:
+
+Plugins are not allowed to call core functions directly. They simply return JSON results to the orchestrator. The orchestrator interprets these results and decides whether to proceed or halt the pipeline.
+github.com
+
+Core → Plugin:
+
+The orchestrator invokes plugins through the MCP proxy, passing standardized actions and parameters. It handles errors by aborting the stage and logging the failure.
+
+Timeouts and resource limits are enforced by the sandbox scripts and by process limits when launching MCP servers.
+
+Plugin → Plugin:
+
+Plugins do not communicate directly. They are isolated processes executed sequentially. If two SAST plugins are configured, the orchestrator calls them one after another and aggregates results.
+
+Section A5: PLUGIN CAPABILITIES & PERMISSIONS
+A5.1 Permission Model
+
+Permission Levels:
+
+Reader: Can list available tools but cannot execute them
+github.com
+.
+
+Contributor: Can run formatting, linting, type checking, and tests
+github.com
+.
+
+Maintainer: All contributor capabilities plus SAST, policy evaluation, secret scanning, and release actions
+github.com
+.
+
+Capability Declarations:
+Permissions are declared in access_groups.json, where each role maps to a subset of server IDs and tool names. For example:
+
+{
+  "contributor": {
+    "servers": ["powershell-quality", "python-quality"],
+    "tools": ["format", "lint", "type", "test"]
+  },
+  "maintainer": {
+    "servers": ["powershell-quality", "python-quality", "semgrep", "policy", "secrets"],
+    "tools": ["format", "lint", "type", "test", "sast", "policy", "secrets"]
+  }
+}
+
+
+Restrictions:
+
+❌ Plugins cannot spawn arbitrary processes or connect to the network; sandbox scripts block outbound access
+github.com
+.
+
+❌ Plugins cannot modify the repository outside permitted directories (src/ and tests/)
+github.com
+.
+
+❌ Plugins cannot alter core configuration or bypass guardrail checks.
+
+Sandboxing/Isolation:
+Sandboxes use Linux unshare network namespaces or Windows firewall rules to isolate execution
+github.com
+. Each plugin invocation runs within an ephemerally cloned workspace, enforcing no network and restricting file access to the workspace
+github.com
+. Resource limits (e.g., process timeouts) are enforced by the orchestrator.
+
+A5.2 Core Services Available to Plugins
+Service	Purpose	Access Pattern	Permission Required
+Formatting	Run code formatters (black/ruff, PSScriptAnalyzer) on a workspace
+github.com
+	Invoke-McpTool with action: format	Contributor
+Linting	Run linters (ruff, PSScriptAnalyzer, ESLint)
+github.com
+	Invoke-McpTool with action: lint	Contributor
+Type Check	Run static type checkers (mypy, tsc)
+github.com
+	Invoke-McpTool with action: type	Contributor
+Unit Tests	Execute tests (Pester, pytest)
+github.com
+	Invoke-McpTool with action: test	Contributor
+SAST	Run Semgrep scans
+github.com
+	Invoke-McpTool with action: sast	Maintainer
+Policy Evaluation	Evaluate OPA/Conftest rules to enforce business policies
+github.com
+	Invoke-McpTool with action: policy	Maintainer
+Secret Scan	Run secret scanners (gitleaks)
+github.com
+	Invoke-McpTool with action: secrets	Maintainer
+Ledger Logging	Record run results to append‑only ledger
+github.com
+	Write-RunLedgerEntry (core script)	Maintainer
+Section A6: PLUGIN VALIDATION & QUALITY GATES
+A6.1 Pre‑Load Validation
+
+Validation Checks:
+
+Server Configuration Check – Test‑McpEnvironment.ps1 iterates over each entry in mcp_servers.json and verifies that the executable exists and the process can start
+github.com
+. Pass criteria: server responds to a health call; fail action: initialization aborts and administrators must fix the manifest.
+
+Access Control Check – access_groups.json is parsed to ensure each role references only declared servers; unknown tools cause a validation error.
+
+Schema Validation – Test‑ChangePlan.ps1 uses changeplan.schema.json to validate incoming ChangePlans
+github.com
+. Fail action: the pipeline returns a schema‑error and rejects the plan.
+
+Diff Validation – Test‑UnifiedDiff.ps1 ensures diff files are unified format and apply cleanly
+github.com
+; invalid diffs are rejected.
+
+Validation Tool/Command:
+
+# Run full SafePatch validation locally
+pwsh -File tools/Verify.ps1
+# Or orchestrate a specific ChangePlan
+pwsh -File scripts/validation/Invoke-SafePatchValidation.ps1 -Plan changeplan.json
+
+A6.2 Runtime Safety Mechanisms
+
+Error Isolation:
+Each plugin runs in a separate process inside an isolated workspace. If a plugin crashes or returns a non‑zero exit code, the orchestrator catches the error, logs it, and halts further stages. Failures do not propagate outside the sandbox.
+github.com
+
+Resource Limits:
+Scripts like sandbox_linux.sh and sandbox_windows.ps1 set strict policies:
+
+Memory & CPU: system defaults or CI runners limit available resources; timeouts can be enforced when invoking tools.
+
+Time: each stage may specify a maximum runtime; exceeding it triggers a timeout and failure.
+
+I/O: network access is disabled; file writes are confined to the sandbox workspace
+github.com
+.
+
+Circuit Breakers:
+The orchestrator implements built‑in circuit breakers: repeated failures in a stage cause the plugin to be auto‑disabled or flagged for quarantine. For example, unhealthy servers are auto‑quarantined by GET /v1/mcp/servers/health checks
+github.com
+. Administrators must restore them before re‑enabling.
+
+Section A7: PLUGIN CONFIGURATION & CUSTOMIZATION
+A7.1 Configuration System
+
+Configuration Sources:
+
+mcp_servers.json – Primary source for server definitions and global options
+github.com
+.
+
+access_groups.json – Defines role‑based access control
+github.com
+.
+
+Environment variables / command‑line parameters – Used to customize runtime (e.g., toggling run_command_in_terminal).
+
+Config Precedence:
+Initialize‑McpEnvironment.ps1 merges the desired state from JSON with the current state on disk
+github.com
+. Explicit parameters passed on the command line override defaults. If a setting exists in both servers and environment variables, environment variables take precedence.
+
+Hot‑Reload Support:
+MCP configuration is designed for declarative updates via New‑McpConfigurationObject.ps1 and Set‑McpConfiguration.ps1. However, changes require reinitialization; servers are not hot‑reloaded automatically.
+
+Configuration Schema:
+
+{
+  "mcp_config": {
+    "servers": {
+      "<server_id>": {
+        "type": "process",
+        "cmd": "string",
+        "args": ["string"]
+      }
+    },
+    "tools": {
+      "run_command_in_terminal": false
+    }
+  }
+}
+
+
+Example Plugin Config: See the manifest example in Section A3.2; customizing the args array allows passing additional flags (e.g., enabling strict mode for ruff or mypy). For instance, to enforce mypy strictness, the python-quality server could set args: ["-m", "quality_mcp", "--mypy-strict"].
+
+A7.2 Plugin‑Specific Customization
+
+Customization Points:
+
+Tool Options: Plugins may expose optional flags for underlying tools (e.g., ruff fix mode, mypy config paths). These options can be passed in the options field of MCP requests.
+
+Extended Stages: Developers can add new stages (e.g., property‑based testing) by extending Invoke‑SafePatchValidation.ps1 and implementing corresponding hooks in MCP servers
+github.com
+.
+
+Meta‑plugins: MCP servers can dispatch to other tools internally; for example, a policy server may call multiple OPA bundles.
+
+Templates/Scaffolding:
+
+While there is no automatic generator for MCP servers, templates under /templates/ provide scaffolds for languages. To create a new Python MCP server:
+
+# Copy Python CLI template and adapt to MCP server
+cp templates/python/python_cli.py mcp-servers/python/my_new_mcp.py
+# Edit mcp_servers.json to register the new server
+pwsh -File .mcp/New-McpConfigurationObject.ps1 -Path .mcp/mcp_servers.json
+# Initialize environment
+pwsh -File .mcp/Initialize-McpEnvironment.ps1 -Verbose
+
+PART B: COMPLETE MODULAR ARCHITECTURE
+Section B1: TIER 1: CORE MODULES (Sacred/Privileged)
+
+Below, each module is numbered and classified according to the criteria: indispensable for system operation, privileged access, or central orchestration.
+
+Module 1: MCP Configuration & Orchestration
+
+Purpose: Manages desired-state configuration for MCP servers and merges it with current state; exposes initialization, validation, and update commands. Serves as the entry point for discovering plugins and verifying health
+github.com
+.
+
+Deliverables:
+
+/.mcp/mcp_servers.json – Manifest of servers with type, command, and args
+github.com
+.
+
+/.mcp/access_groups.json – Defines permission groups and authorized tools
+github.com
+.
+
+/.mcp/Initialize‑McpEnvironment.ps1 – Reads desired state, creates configuration, and starts servers
+github.com
+.
+
+/.mcp/Get‑DesiredStateConfiguration.ps1 – Parses desired-state JSON.
+
+/.mcp/Get‑McpConfiguration.ps1, New‑McpConfigurationObject.ps1, Set‑McpConfiguration.ps1 – Manage current and merged state.
+
+/.mcp/Test‑McpEnvironment.ps1 – Validates that servers respond and required tools exist
+github.com
+.
+
+Key Contracts:
+
+function Initialize-McpEnvironment([string]$Path) -> void
+function Test-McpEnvironment() -> bool
+function Get-McpConfiguration() -> [Hashtable]
+function New-McpConfigurationObject([Hashtable]$Desired, [Hashtable]$Current) -> [Hashtable]
+function Set-McpConfiguration([Hashtable]$Config) -> void
+
+
+Core Module Identification Criteria: This module is necessary for discovering and starting plugin servers; misconfiguration blocks the entire pipeline. It controls privileged operations (starting processes), writes config files, and determines available tools.
+
+Module 2: Guardrail & Policy Framework
+
+Purpose: Provides structural and policy guardrails that validate ChangePlans, diffs, and code content. Ensures that AI‑generated changes adhere to organizational rules
+github.com
+.
+
+Deliverables:
+
+/policy/schemas/changeplan.schema.json – JSON Schema for ChangePlan validation
+github.com
+.
+
+/policy/schemas/unifieddiff.schema.json – Schema for unified diffs
+github.com
+.
+
+/policy/opa/changeplan.rego, delivery_bundle.rego, forbidden_apis.rego – OPA policies to enforce required fields, forbid absolute paths, and block dangerous APIs
+github.com
+.
+
+/.semgrep/semgrep.yml, semgrep-powershell.yml, semgrep-python.yml, semgrep-secrets.yml – Semgrep rulesets to detect anti‑patterns across languages
+github.com
+.
+
+Key Contracts:
+
+JSON Schema definitions (see ChangePlan schema in Section A4.1).
+
+OPA policy functions: deny[msg] rules that return human‑readable explanations for violations
+github.com
+.
+
+Semgrep rules containing id, message, severity, and pattern matching expressions
+github.com
+.
+
+Core Module Identification Criteria: Without schema and policy validation, the system cannot guarantee deterministic and safe operations. These artifacts enforce system‑wide rules and block unsafe inputs.
+
+Module 3: SafePatch Validation Pipeline
+
+Purpose: Orchestrates the multi‑stage quality enforcement pipeline. It clones an ephemerally isolated workspace, applies diffs, runs formatting, linting, type checking, testing, SAST, policy evaluation, and secret scanning, and aggregates results
+github.com
+.
+
+Deliverables:
+
+scripts/validation/Invoke‑SafePatchValidation.ps1 – Primary orchestrator implementing the pipeline
+github.com
+.
+
+scripts/validation/Invoke‑FormatCheck.ps1, Invoke‑LintCheck.ps1, Invoke‑TypeCheck.ps1, Invoke‑UnitTests.ps1, Invoke‑SastScan.ps1, Invoke‑PolicyCheck.ps1, Invoke‑SecretScan.ps1 – Stage‑specific helpers.
+
+scripts/validation/Test‑ChangePlan.ps1, Test‑UnifiedDiff.ps1 – Validate ChangePlan and diff before pipeline starts
+github.com
+.
+
+tools/Verify.ps1 – Simplified entrypoint for local validation; calls the same pipeline steps and matches CI
+github.com
+.
+
+Key Contracts:
+
+function Invoke-SafePatchValidation([object]$Plan) -> [object]  # returns aggregated results
+function Test-ChangePlan([object]$Plan) -> bool
+function Apply-Patches([array]$Changes) -> void
+function Invoke-Stage([string]$Stage,[string]$Workspace,[string[]]$Servers) -> void
+
+
+Core Module Identification Criteria: The SafePatch pipeline orchestrates all plugin calls and gating logic; if removed, there is no enforcement mechanism. It handles critical data (diffs, test results) and interacts with all plugin servers.
+
+Module 4: Audit & Observability Layer
+
+Purpose: Records the outcome of every validation run in an append‑only ledger, generates weekly reports, and monitors guardrail drift
+github.com
+.
+
+Deliverables:
+
+/schemas/ledger.schema.json – JSON Schema defining ledger entry fields.
+
+scripts/audit/New‑RunLedgerEntry.ps1 – Appends a signed JSONL entry after each run
+github.com
+.
+
+scripts/audit/Get‑RunLedger.ps1 – Retrieves ledger entries for analysis.
+
+scripts/audit/Export‑WeeklyReport.ps1 – Aggregates metrics across runs to produce weekly reports
+github.com
+.
+
+scripts/audit/Invoke‑DriftDetection.ps1 – Detects differences between desired and actual guardrail configurations
+github.com
+.
+
+database/schema.sql, seed_data.sql, and migrations – Define relational schema for access groups, tools, policies, and ledger
+github.com
+.
+
+Key Contracts:
+
+CREATE TABLE run_ledger (
+  id INTEGER PRIMARY KEY,
+  run_id TEXT UNIQUE NOT NULL,
+  timestamp TEXT NOT NULL,
+  actor TEXT,
+  repo TEXT,
+  result TEXT,
+  artifact_path TEXT,
+  sig TEXT
+);
+
+
+Core Module Identification Criteria: Audit logs provide accountability and compliance evidence; without them, there is no audit trail. The module manages critical state (ledger) and cannot be disabled.
+
+Module 5: Sandbox & Workspace Management
+
+Purpose: Provides network‑isolated, reproducible environments for executing plugin tools. Ensures deterministic behavior and prevents data exfiltration.
+github.com
+
+Deliverables:
+
+scripts/sandbox/sandbox_linux.sh – Runs commands in a network namespace
+github.com
+.
+
+scripts/sandbox/sandbox_windows.ps1 – Blocks outbound traffic via firewall rules
+github.com
+.
+
+scripts/sandbox/New‑EphemeralWorkspace.ps1 – Creates a temporary Git worktree
+github.com
+.
+
+scripts/sandbox/Remove‑EphemeralWorkspace.ps1 – Deletes the workspace after validation
+github.com
+.
+
+Key Contracts:
+
+# sandbox_linux.sh
+sudo unshare -n bash -lc "$*"  # run command in new network namespace:contentReference[oaicite:114]{index=114}
+
+# sandbox_windows.ps1
+New-NetFirewallRule ... -Direction Outbound -Action Block ...
+try { & pwsh -NoLogo -NoProfile -NonInteractive -Command $Command }
+finally { Remove-NetFirewallRule ... }
+
+
+Core Module Identification Criteria: Without sandboxing, plugins could leak data or access the network. This module is essential to enforce isolation guarantees
+github.com
+.
+
+Module 6: CI/CD Integration
+
+Purpose: Mirrors local validation in continuous integration, ensures that pull requests are gated on passing SafePatch, and performs nightly drift detection.
+github.com
+
+Deliverables:
+
+/.github/workflows/quality.yml – Runs validation across PowerShell, Python, TypeScript, SAST, policy, and secrets
+github.com
+.
+
+/.github/workflows/powershell-verify.yml, python-verify.yml, typescript-verify.yml, sast-secrets.yml, policy-check.yml, drift-detection.yml – Job‑specific workflows splitting responsibilities.
+
+.github/renovate.json – Configures dependency update automation.
+
+Key Contracts: GitHub Actions YAML definitions specifying triggers (push/pull_request), job matrices, and steps that call scripts defined in other modules.
+
+Core Module Identification Criteria: This module enforces gates outside developers’ environments. Without CI integration, enforcement would rely only on local runs.
+
+Module 7: Edit Engine
+
+Purpose: Provides deterministic file modifications using unified diffs, JSON patches, structural refactoring, and template regeneration
+github.com
+.
+
+Deliverables:
+
+tools/edit-engine/apply_patch.ps1 – Applies unified diff patches while producing logs.
+
+tools/edit-engine/apply_jsonpatch.ps1 – Applies RFC 6902 JSON patches with schema validation.
+
+tools/edit-engine/run_comby.ps1, run_ast_mod.ps1 – Run structural refactorings using Comby or AST codemods.
+
+tools/edit-engine/regenerate.ps1 – Regenerates files from templates.
+
+Key Contracts:
+
+function Apply-Patch([string]$UnifiedDiff) -> bool
+function Apply-JsonPatch([string]$JsonPatch) -> bool
+function Run-Comby([string]$Pattern,[string]$Rewrite) -> bool
+function Regenerate([string]$Template,[hashtable]$Params) -> void
+
+
+Core Module Identification Criteria: The edit engine enforces minimal diffs; it prevents full file rewrites and ensures reproducible modifications. Patching is central to the safe editing model
+github.com
+.
+
+Module 8: Templates & Code Skeletons
+
+Purpose: Provide self‑defensive code templates for PowerShell, Python, and TypeScript to encourage secure coding practices
+github.com
+.
+
+Deliverables:
+
+templates/powershell/AdvancedFunction.ps1, Module.psm1, Module.psd1, Pester.Tests.ps1 – PowerShell function and module templates with StrictMode, ShouldProcess, parameter validation, and Pester tests
+github.com
+.
+
+templates/python/python_cli.py, test_template.py, pyproject.toml – Python CLI and test scaffolds enforcing argparse, logging, typing
+github.com
+.
+
+templates/typescript/typescript_module.ts – Strict TypeScript module template.
+
+Key Contracts: Template files are not executed but provide starting points for new modules. They follow coding conventions defined in docs/conventions.md
+github.com
+.
+
+Core Module Identification Criteria: Templates ensure new code adheres to guardrails by default; they underpin the reproducibility and safety of generated code.
+
+Module 9: File Routing System (optional core)
+
+Purpose: Routes downloaded or generated files into appropriate directories based on naming conventions. Supports deterministic organization and integration with external tools.
+
+Deliverables:
+
+file-routing/file_router.config.json – Mapping of project codes to directories.
+
+file-routing/FileRouter_Watcher.ps1 – Watches the Downloads folder and routes files based on naming conventions.
+
+file-routing/Naming_Convention_Guide.md – Documentation of naming scheme (e.g., PROJECT-AREA-SUBFOLDER__name__timestamp__version__ulid__sha8).
+
+Key Contracts:
+
+{
+  "PROJECT": {
+    "AREA1": "src/area1",
+    "AREA2": "tests/area2"
+  }
+}
+
+
+Core Module Identification Criteria: While not strictly required for SafePatch, file routing is integral to deterministic file organization and is referenced by agent guidelines
+github.com
+.
+
+Section B2: TIER 2: PLUGIN/EXTENSION MODULES (Extensible/Evolvable)
+Module 1: PowerShell Quality MCP Server
+
+Purpose: Exposes formatting, linting, type checking, and testing for PowerShell code via the MCP API
+github.com
+.
+
+Deliverables:
+
+mcp-servers/powershell/ps_quality_mcp.ps1 – Implements actions: format, lint, type, test, and optionally edit.
+
+PowerShell configuration files (e.g., tools/PSScriptAnalyzerSettings.psd1).
+
+Integration with SafePatch pipeline through Invoke-McpTool calls.
+
+Hook/Event Name: onFormat, onLint, onTypeCheck, onTest.
+
+Input Contract:
+
+{
+  "event": "format",
+  "inputs": {
+    "path": "string"  // workspace path
+  }
+}
+
+
+Output Contract:
+
+[
+  {
+    "action": "format",
+    "payload": {
+      "changed": true,
+      "diff": "<unified diff>"
+    }
+  }
+]
+
+
+Plugin Identification Criteria: Implements language‑specific quality checks; can be added or removed without affecting core logic as long as at least one server covers PowerShell. Optional but recommended for repos containing PowerShell code.
+
+Module 2: Python Quality MCP Server
+
+Purpose: Exposes Python formatting (black/ruff), linting (ruff), type checking (mypy), and testing (pytest)
+github.com
+.
+
+Deliverables:
+
+mcp-servers/python/quality_mcp.py – Implements actions: format, lint, type, test.
+
+Python configuration (tools/ruff.toml, tools/mypy.ini, tools/pytest.ini).
+
+Hook/Event Name: Same as above (onFormat, onLint, onTypeCheck, onTest).
+
+Input Contract:
+
+{
+  "event": "lint",
+  "inputs": {
+    "path": "string"
+  }
+}
+
+
+Output Contract:
+
+[
+  {
+    "action": "lint",
+    "payload": {
+      "ok": false,
+      "diagnostics": [ { "id": "E999", "message": "Syntax error" } ]
+    }
+  }
+]
+
+
+Plugin Identification Criteria: Provides Python quality enforcement. It may be replaced by an alternative implementation (e.g., another linter) provided the interface remains constant.
+
+Module 3: Semgrep SAST MCP Server
+
+Purpose: Wraps the Semgrep static analysis tool to identify security vulnerabilities across languages
+github.com
+.
+
+Deliverables:
+
+mcp-servers/sast/semgrep_mcp.py – Implements action sast.
+
+Semgrep rule packs in /.semgrep/*.yml
+github.com
+.
+
+Hook/Event Name: onSAST.
+
+Plugin Identification Criteria: Optional plugin used when SAST scanning is required; can be substituted with a different SAST tool.
+
+Module 4: Policy MCP Server
+
+Purpose: Runs OPA/Conftest policies to validate ChangePlans, diffs, and resulting artifacts
+github.com
+.
+
+Deliverables:
+
+mcp-servers/policy/policy_mcp.py – Implements action policy.
+
+Policy bundles (policy/opa/*.rego)
+github.com
+.
+
+Hook/Event Name: onPolicy.
+
+Plugin Identification Criteria: Ensures that organizational policies are enforced; multiple policy servers can be used for different policy sets.
+
+Module 5: Secrets MCP Server
+
+Purpose: Runs secret scanners (e.g., gitleaks) to detect accidental inclusion of secrets
+github.com
+.
+
+Deliverables:
+
+mcp-servers/secrets/secrets_mcp.py – Implements action secrets.
+
+Secret scanning configuration (e.g., patterns, allowlists).
+
+Hook/Event Name: onSecret.
+
+Plugin Identification Criteria: Optional plugin for secret scanning; can be replaced with other scanners.
+
+Module 6: File Router
+
+Purpose: Automatically routes files based on naming conventions into appropriate directories. Helps integrate generated artifacts with the rest of the repo
+github.com
+.
+
+Deliverables:
+
+file-routing/file_router.config.json – Configuration mapping project codes to directories.
+
+file-routing/FileRouter_Watcher.ps1 – Watches Downloads folder and routes files.
+
+file-routing/Naming_Convention_Guide.md – Documentation of naming scheme.
+
+Hook/Event Name: Could be wired to a postDownload event in the future; currently triggered manually or via OS watchers.
+
+Plugin Identification Criteria: Improves developer productivity but is not required for core validation; can be added or removed.
+
+Module 7: Edit Engine Tools
+
+Purpose: Provide helpers for applying diffs and codemods. While part of core enforcement, they can be extended with additional codemod tools (e.g., Comby) to support new refactoring patterns
+github.com
+.
+
+Deliverables:
+
+tools/edit-engine/apply_patch.ps1, apply_jsonpatch.ps1, run_comby.ps1, run_ast_mod.ps1, regenerate.ps1 – Tools invoked by the edit stage or by plugins.
+
+Hook/Event Name: onApplyPatch, onJsonPatch, onRefactor (internal to orchestrator). These are not part of the SafePatch pipeline but could be exposed as plugin hooks in the future.
+
+Plugin Identification Criteria: Additional codemods can be added without changing core behavior; existing tools remain optional.
+
+Section B3: TIER 3: SUPPORT MODULES
+Module 1: Pre‑commit Integration
+
+Purpose: Provides local Git hooks to enforce guardrails on developers’ machines. Reduces drift between local development and CI.
+
+Deliverables:
+
+.pre‑commit‑config.yaml – Defines hooks for ruff, black, mypy, PSScriptAnalyzer, Pester, Semgrep
+github.com
+.
+
+scripts/hooks/install-hooks.ps1, pre‑commit.ps1 – Installer and custom hook logic.
+
+Key Contracts: Pre‑commit uses YAML to declare hooks; scripts must return non‑zero exit codes to block commits.
+
+Support Module Identification Criteria: Cross‑cutting concern; used by multiple modules but not part of core enforcement.
+
+Module 2: Testing Infrastructure
+
+Purpose: Supplies fixtures, unit tests, and integration tests to validate pipeline components and guardrail policies.
+
+Deliverables:
+
+tests/fixtures/ – Sample data used by unit tests.
+
+tests/integration/ – End‑to‑end tests for the SafePatch pipeline.
+
+tests/unit/ – Unit tests for individual modules.
+
+tests/Invoke‑IntegrationTests.ps1 – Runs integration tests.
+
+Key Contracts: Test scripts accept command‑line options for selecting tests; integration tests rely on a working MCP environment.
+
+Support Module Identification Criteria: Supports quality assurance; not directly part of core enforcement.
+
+Module 3: Database & Migrations
+
+Purpose: Contains SQL schema and seed data for persistent storage of access groups, tools, policies, and ledger entries
+github.com
+.
+
+Deliverables:
+
+database/schema.sql – Defines tables for access groups, tools, policies, and run ledger.
+
+database/seed_data.sql – Inserts default access groups and policies.
+
+database/migrations/ – Migration scripts for schema evolution.
+
+Key Contracts: SQL schema definitions; migration scripts must be idempotent.
+
+Support Module Identification Criteria: Provides support services (storage) used by audit and policy modules; not part of core logic.
+
+Module 4: Documentation & Guides
+
+Purpose: Documents system architecture, guardrails, MCP integration, validation pipeline, agent behavior, conventions, and troubleshooting
+github.com
+.
+
+Deliverables:
+
+docs/ARCHITECTURE.md – High‑level system description
+github.com
+.
+
+docs/GUARDRAILS.md – Description of guardrail categories and extensions
+github.com
+.
+
+docs/MCP_INTEGRATION.md – Guide on configuring and operating MCP servers
+github.com
+.
+
+docs/VALIDATION_PIPELINE.md – Stage‑by‑stage pipeline explanation
+github.com
+.
+
+docs/AGENT_GUIDELINES.md – Behavioral standards for agents interacting with the repo
+github.com
+.
+
+docs/TROUBLESHOOTING.md, docs/conventions.md – Additional guidance.
+github.com
+
+Support Module Identification Criteria: Provides knowledge but does not run at runtime; cross‑cutting educational resource.
+
+Section B4: COMPLETE DELIVERABLES SUMMARY TABLE
+Module	Core Files	Generated Artifacts	Config Files	Tests
+MCP Configuration & Orchestration	.mcp/*.ps1, mcp_servers.json, access_groups.json	Merged configuration (mcp.json), running server processes	Desired‑state JSON, environment variables	Test-McpEnvironment.ps1
+Guardrail & Policy Framework	policy/schemas/*.json, policy/opa/*.rego, .semgrep/*.yml	Violations reports, policy decisions	Schema definitions, rule packs	Test-ChangePlan.ps1, policy unit tests
+SafePatch Validation Pipeline	scripts/validation/*.ps1, tools/Verify.ps1	Validation reports, diffed workspace, consolidated results	Stage configuration (gates)	Integration tests (tests/integration)
+Audit & Observability	scripts/audit/*.ps1, schemas/ledger.schema.json	Signed JSONL ledger entries, weekly reports	Database schema, seed data	Audit script tests
+Sandbox & Workspace Management	scripts/sandbox/*.ps1, scripts/sandbox/*.sh	Ephemeral workspaces, sandboxed processes	Sandbox configuration variables	Tests covering sandbox teardown
+CI/CD Integration	.github/workflows/*.yml, renovate.json	CI build logs, PR statuses	Workflow definitions	End‑to‑end tests via GitHub Actions
+Edit Engine	tools/edit-engine/*.ps1	Applied patches, regenerated files	N/A (tool parameters)	Unit tests for patch application
+Templates & Code Skeletons	templates/*	New project scaffolds	Template configs (pyproject.toml)	None (used for generation)
+File Router	file-routing/*.ps1, file_router.config.json	Routed files	Configuration JSON	Tests covering routing behavior
+PowerShell Quality MCP Server	mcp-servers/powershell/ps_quality_mcp.ps1	Lint/test results, formatted code	PSScriptAnalyzer settings	Pester tests
+Python Quality MCP Server	mcp-servers/python/quality_mcp.py	Ruff/mypy/pytest results	ruff.toml, mypy.ini, pytest.ini	Pytest tests
+Semgrep SAST MCP Server	mcp-servers/sast/semgrep_mcp.py	SAST findings	Semgrep config	Semgrep test fixtures
+Policy MCP Server	mcp-servers/policy/policy_mcp.py	Policy decisions	OPA policies	Policy tests
+Secrets MCP Server	mcp-servers/secrets/secrets_mcp.py	Secret scan results	Scanner config	Secret detection tests
+Pre‑commit Integration	.pre-commit-config.yaml, scripts/hooks/*.ps1	Hook execution logs	Hook configuration	Pre‑commit tests
+Testing Infrastructure	tests/**/*	Test results	Test fixtures	Unit and integration tests
+Database & Migrations	database/schema.sql, seed_data.sql, migrations	Populated DB tables	SQL config	Migration tests
+Documentation & Guides	docs/*	Rendered docs	N/A	None
+Section B5: MODULE DEPENDENCIES
+[MCP Configuration & Orchestration]
+└── initializes and manages --> [PowerShell Quality MCP Server]
+                              ├── calls (format/lint/type/test)
+                              └── depends on --> [Templates & Code Skeletons] (for tests)
+                              
+                              [Python Quality MCP Server]
+                              ├── uses --> [ruff, black, mypy, pytest]
+                              └── depends on --> [Templates & Code Skeletons]
+
+[MCP Configuration & Orchestration] also -> [Semgrep SAST MCP Server]
+                                          -> [Policy MCP Server]
+                                          -> [Secrets MCP Server]
+                                          
+[SafePatch Validation Pipeline]
+├── uses --> [Sandbox & Workspace Management] (prepare isolated environment)
+├── reads --> [Guardrail & Policy Framework] (schemas, rules)
+├── calls --> [MCP Servers] in sequence (format -> lint -> type -> test -> sast -> policy -> secrets)
+├── writes --> [Audit & Observability] (ledger entries)
+└── uses --> [Edit Engine] for applying patches
+
+[Audit & Observability]
+└── writes --> [Database & Migrations]
+
+[CI/CD Integration]
+├── runs --> [SafePatch Validation Pipeline] in workflows
+├── invokes --> [Sandbox & Workspace Management] on runners
+└── triggers --> [Audit & Observability] after jobs finish
+
+[File Router]
+└── interacts with --> [Edit Engine] (to apply patches to routed files)
+
+[Pre‑commit Integration]
+└── executes --> [SafePatch Validation Pipeline] (via tools/Verify.ps1)
+
+[Testing Infrastructure]
+└── tests --> [All Modules]
+
+Section B6: INTEGRATION POINTS
+External Tool Integration
+
+Black/Ruff/Mypy/Pytest – Python quality tools integrated through the Python MCP server. The MCP server invokes these executables and returns structured results
+github.com
+.
+
+PSScriptAnalyzer & Pester – PowerShell quality tools integrated through the PowerShell MCP server
+github.com
+.
+
+Semgrep – Static application security testing integrated via the SAST MCP server. Rule packs are stored under .semgrep/
+github.com
+.
+
+Gitleaks – Secret scanning integrated via the secrets MCP server.
+github.com
+
+OPA/Conftest – Policy engine integrated via the policy MCP server
+github.com
+.
+
+GitHub Actions – CI environment running the SafePatch pipeline with Windows and Linux runners
+github.com
+.
+
+Database (SQLite/Postgres) – Stores ledger entries and access configurations
+github.com
+.
+
+Data Flows
+
+Developer Workflow (Local):
+Developer creates a ChangePlan and unified diff → runs tools/Verify.ps1 → script clones an ephemerally isolated workspace
+github.com
+ → diff applied using Edit Engine → calls MCP servers for format/lint/type/test/SAST/policy/secrets sequentially
+github.com
+ → results aggregated and printed to developer → if all pass, developer pushes code.
+
+AI Agent Workflow:
+AI agent proposes ChangePlan and diff → proxy forwards to MCP tool plane
+github.com
+ → guardrail layer validates schemas and policies
+github.com
+ → SafePatch pipeline runs in sandbox → results returned to agent → agent may apply one auto‑fix patch per failure class
+github.com
+ → on success, commit created.
+
+CI Pipeline:
+Pull request opens → GitHub Actions triggers quality.yml and other workflows
+github.com
+ → jobs checkout code, initialize MCP environment, run SafePatch pipeline using the same scripts as local → statuses reported back to GitHub → branch protection enforces passing status before merge
+github.com
+.
+
+Governance & Reporting:
+Audit scripts append ledger entries for each validation run
+github.com
+ → weekly report generated via Export‑WeeklyReport.ps1 summarizing pass rates and violations
+github.com
+ → drift detection checks ensure guardrails and branch protections haven’t been altered
+github.com
+.
+
+MCP Configuration Update:
+Admin edits mcp_servers.json or access_groups.json → runs Initialize‑McpEnvironment.ps1 → script reads desired state, merges with current configuration, starts new or updated servers
+github.com
+ → Test‑McpEnvironment.ps1 ensures servers are healthy
+github.com
+ → updated configuration committed to version control.
+
+PART C: PLUGIN ECOSYSTEM & DEVELOPMENT
+Section C1: PLUGIN DEVELOPMENT WORKFLOW
+C1.1 Plugin Creation Process
+
+Identify a New Quality Task. Decide which quality action (e.g., license scanning, mutation testing) should be added.
+
+Implement MCP Server Script. Create a script in mcp-servers/<domain>/ that listens for JSON requests and dispatches to the underlying tool. Follow patterns seen in ps_quality_mcp.ps1 and quality_mcp.py.
+
+Update Manifest. Add an entry to mcp_servers.json with a unique server ID, execution type (process), executable, and arguments.
+github.com
+
+Define Access Groups. Extend access_groups.json to grant appropriate roles (reader, contributor, maintainer) access to the new server and its actions.
+github.com
+
+Register Schemas or Policies. If the plugin enforces new structures or rules, add JSON Schemas or OPA policies under policy/ and update tests accordingly.
+
+Initialize Environment. Run Initialize‑McpEnvironment.ps1 to start the new server and write merged configuration
+github.com
+.
+
+Validate Locally. Use tools/Verify.ps1 to run your new plugin through the SafePatch pipeline and ensure it works as expected.
+
+Commit and Review. Commit changes, write documentation, and open a pull request. CI will run the same pipeline to verify integration.
+
+Tools Required:
+
+PowerShell 7.4 (for Windows servers and scripts)
+
+Python 3.12 (for Python servers)
+
+Node.js 20 (for TypeScript tools)
+
+Git and GitHub for version control and CI
+
+Optional: Docker or virtualization for testing isolated environments
+
+Scaffolding/Generators:
+
+Currently there is no dedicated generator for MCP servers, but developers can repurpose the existing templates:
+
+cp mcp-servers/python/quality_mcp.py mcp-servers/python/my_new_server.py
+# adjust __main__ to expose new actions
+cp .mcp/mcp_servers.json .mcp/mcp_servers.json.bak
+# edit JSON to add the new server
+pwsh -File .mcp/New-McpConfigurationObject.ps1 -Path .mcp/mcp_servers.json
+
+C1.2 Testing & Debugging
+
+Testing Framework:
+
+PowerShell: Use Pester for unit tests; Invoke‑Pester is integrated into the SafePatch pipeline
+github.com
+.
+
+Python: Use pytest with fixtures located in tests/fixtures/; coverage settings defined in pytest.ini.
+
+Semgrep & OPA: Test rule packs and policies using dedicated tests in tests/integration/ and tests/policy/.
+
+Test Runner Integration:
+MCP servers should be testable in isolation. Provide unit tests that call server functions directly. Integration tests call Invoke‑SafePatchValidation.ps1 with sample ChangePlans and verify that your plugin’s results are respected.
+
+Debugging Tools:
+
+Use verbose logging within the server script and sandbox (e.g., Write-Verbose in PowerShell or logging in Python).
+
+Run servers manually (e.g., python mcp-servers/python/quality_mcp.py) and pipe JSON requests to observe outputs.
+
+Use the ledger (Get‑RunLedger.ps1) to inspect past runs when troubleshooting failures.
+
+Test Example:
+
+# Sample Pester test for a new MCP plugin
+Describe "MyNewServer" {
+  It "should format scripts with no errors" {
+    $resp = & pwsh -NoProfile -File mcp-servers/powershell/my_new_mcp.ps1 -Action format -Path 'tests/fixtures/sample.ps1'
+    $resp.passed | Should -BeTrue
+  }
+}
+
+Section C2: PLUGIN ECOSYSTEM
+C2.1 Official/Built‑in Plugins
+Plugin Name	Purpose	Hooks Used	Stability
+PowerShell Quality MCP Server	Formatting, linting, type checking, and testing for PowerShell code
+github.com
+	onFormat, onLint, onTypeCheck, onTest	Stable
+Python Quality MCP Server	Formatting, linting, type checking, and testing for Python code
+github.com
+	onFormat, onLint, onTypeCheck, onTest	Stable
+Semgrep SAST MCP Server	Static analysis across supported languages
+github.com
+	onSAST	Stable
+Policy MCP Server	OPA/Conftest policy validation
+github.com
+	onPolicy	Stable
+Secrets MCP Server	Secret scanning with gitleaks
+github.com
+	onSecret	Stable
+File Router	Routes downloaded/generated files to correct directories
+github.com
+	Custom (postDownload)	Experimental
+Edit Engine Tools	Applies unified diffs, JSON patches, and codemods
+github.com
+	onApplyPatch, onJsonPatch, onRefactor	Stable
+C2.2 Third‑Party Plugin Support
+
+Distribution Channels:
+
+Developers may host MCP servers in separate repositories or packages. To install, copy the server script into mcp-servers/, update mcp_servers.json, and assign permissions in access_groups.json.
+
+There is no central marketplace; distribution typically occurs via internal Git repositories or package managers.
+
+Package Management:
+
+Because MCP servers are OS processes, language‑specific package managers (pip, npm, PowerShell Gallery) are used to manage dependencies. Pre‑commit hooks and CI jobs install these dependencies.
+
+Installation Process:
+
+Add the server script to mcp-servers/<domain>/.
+
+Register the server in mcp_servers.json.
+
+Grant access via access_groups.json.
+
+Run Initialize‑McpEnvironment.ps1 to start the server.
+
+Add tests and update documentation.
+
+Community Resources:
+
+Documentation Portals: Comprehensive docs are provided in the docs/ folder
+github.com
+.
+
+Example Repositories: This repository itself serves as a reference implementation and includes templates for new MCP servers.
+
+Support Forums: There is no public forum; internal teams should use issue tracking in the repository and weekly reports for feedback
+github.com
+.
+
+Section C3: VERSIONING & COMPATIBILITY
+C3.1 API Versioning
+
+Version Strategy:
+
+Core modules and plugin interfaces follow semantic versioning; major releases may introduce new hooks or change configuration schema.
+
+MCP server APIs should remain backward‑compatible within a major release. Breaking changes require updating the manifest and access groups.
+
+Guardrail schemas (ChangePlan, UnifiedDiff) are versioned via $schema URIs in JSON; new fields must be optional to maintain backward compatibility.
+
+Breaking Change Policy:
+
+Breaking changes to plugin interfaces or schemas must increment the major version of the repository and provide migration guides.
+
+Deprecated fields or hooks are maintained for at least one minor version before removal.
+
+Deprecation Process:
+
+Announce deprecation in documentation; mark old hooks as deprecated in the manifest.
+
+Provide shims or fallback behaviors where possible.
+
+Compatibility Matrix: (illustrative)
+
+Core Version	Plugin API Version	Compatible With	Notes
+2.0.x	2.0	All official MCP servers at v2.0	Current release; supports new guardrails and pipeline stages
+2.0.x	1.0	Requires compatibility layer	Legacy servers need update to handle strict typing
+1.x	1.0	Original release	Lacks some guardrails (e.g., secrets scanning)
+C3.2 Migration Guides
+
+Upgrade Paths:
+
+From v1.x to v2.0: update mcp_servers.json to include new servers (e.g., secrets), rename policy server if necessary, and update schemas. Run Initialize‑McpEnvironment.ps1 after updating manifest. Ensure that tests cover new stages.
+
+For new plugin versions: update the server script, increment its version in comments, and adjust mcp_servers.json accordingly. Add new OPA policies if introducing additional validations.
+
+Breaking Changes Documentation:
+
+Document changes in docs/CHANGELOG.md (if created) and mention the migration steps in docs/TROUBLESHOOTING.md.
+
+Automated Migration Tools:
+
+No automated migration exists yet. However, administrators can write PowerShell scripts to update manifests and access groups based on version differences.
+
+PART D: ARCHITECTURAL ANALYSIS
+Section D1: PLUGIN ARCHITECTURE STRENGTHS & WEAKNESSES
+D1.1 Architectural Strengths
+
+✅ Deterministic Quality Enforcement
+
+Why it’s good: SafePatch imposes a fixed sequence of formatting, linting, type checking, testing, SAST, policy, and secret scanning
+github.com
+. This deterministic pipeline reduces nondeterminism and ensures reproducible outcomes across local and CI environments.
+
+Example: Developers running Verify.ps1 locally will get the same results as CI because the same orchestrator and MCP servers are used.
+github.com
+
+✅ Strong Guardrail Layer
+
+Why it’s good: JSON schemas, OPA policies, and Semgrep rules catch structural, semantic, and security issues early
+github.com
+. This prevents AI agents from introducing unsafe code.
+
+Example: The ChangePlan schema enforces at least one change and forbids absolute paths
+github.com
+.
+
+✅ Process & Network Isolation
+
+Why it’s good: Running each plugin in a separate process within an isolated sandbox eliminates cross‑contamination and network leakage
+github.com
+. The offline environment ensures that results are reproducible and safe.
+
+Example: sandbox_linux.sh uses unshare -n to create a new network namespace
+github.com
+, preventing external network access during validation.
+
+✅ Extensible & Polyglot
+
+Why it’s good: The MCP tool plane is language‑agnostic; new servers for other languages (Go, Rust, Terraform) can be added by writing new scripts and registering them in the manifest
+github.com
+.
+
+Example: The Python and PowerShell servers show how different languages can coexist under the same interface
+github.com
+.
+
+✅ Auditability
+
+Why it’s good: Every validation run produces signed ledger entries with detailed diagnostics
+github.com
+. Weekly reports aggregate trends, enabling governance oversight
+github.com
+.
+
+Example: Export‑WeeklyReport.ps1 surfaces recurring rule violations and drift trends
+github.com
+.
+
+D1.2 Architectural Limitations
+
+⚠️ High Complexity & Learning Curve
+
+Why it’s limiting: The system involves multiple languages, tools, scripts, and configurations. Developers must understand PowerShell, Python, TypeScript, JSON, OPA, Semgrep, and CI workflows.
+
+Workaround: Provide onboarding documentation, templates, and training. Consider building a plugin generator to reduce friction.
+
+⚠️ Performance Overheads
+
+Why it’s limiting: Running full SafePatch pipelines (format, lint, type, test, SAST, policy, secrets) can be slow, especially on Windows runners. Multiple plugins increase execution time.
+
+Workaround: Use caching (e.g., Nx/Bazel) or incremental validation, and run heavier stages (SAST, secrets) only on changed files.
+
+⚠️ Limited Real‑Time Feedback
+
+Why it’s limiting: Because plugins are executed sequentially in a sandbox, feedback is only available after each stage completes. Agents cannot see incremental results until the pipeline finishes.
+
+Workaround: Implement streaming of intermediate results or split stages into asynchronous calls for improved responsiveness.
+
+D1.3 Design Tradeoffs
+
+Flexibility vs. Performance:
+The architecture favors flexibility—allowing plugins to be added or swapped at will—over raw performance. Each plugin call introduces overhead, but this cost is acceptable for the safety and extensibility gained.
+
+Safety vs. Capability:
+Strict guardrails and network isolation protect the system but restrict what plugins can do. For example, the inability to fetch external dependencies may limit testing scenarios. Relaxing these restrictions increases risk.
+
+Simplicity vs. Power:
+The system uses many moving parts, making it powerful and comprehensive at the cost of simplicity. A simpler system might skip SAST or policy checks but would expose the organization to risk.
+
+Section D2: COMPARATIVE METRICS
+D2.1 Plugin System Characteristics
+Characteristic	Rating (1‑5)	Notes
+Ease of Plugin Creation	⭐⭐⭐	Clear patterns exist (server script + manifest), but developers must know underlying tools and write JSON/PowerShell.
+Extensibility Breadth	⭐⭐⭐⭐	Multiple extension points (format, lint, type, test, SAST, policy, secrets) and ability to add more.
+Safety/Isolation	⭐⭐⭐⭐⭐	Strong sandboxing and policy guardrails
+github.com
+.
+Performance Overhead	⭐⭐	Running many tools sequentially can be slow, especially across languages.
+Documentation Quality	⭐⭐⭐⭐	Detailed docs in docs/ folder cover architecture, guardrails, MCP integration, and validation pipeline
+github.com
+.
+Developer Experience	⭐⭐⭐	Templates and scripts help, but multi‑language requirements and complex toolchains raise the bar.
+Plugin Ecosystem Size	⭐⭐⭐	Official plugins cover PowerShell, Python, SAST, policy, and secrets; third‑party plugins can be added but no marketplace exists.
+D2.2 Complexity Analysis
+
+Lines of Code for "Hello World" Plugin: ~50–100 lines (including argument parsing and JSON I/O) in PowerShell or Python.
+
+Number of Required Artifacts: At minimum: one server script and one manifest entry; optional access group update.
+
+Number of Extension Points: Seven core hooks (format, lint, type, test, SAST, policy, secrets) plus internal events for discovery and cleanup.
+
+Learning Curve: Intermediate. Requires knowledge of at least one implementation language (PowerShell/Python), JSON schemas, and the manifest structure.
+
+Time to First Plugin: A day for an experienced developer familiar with the stack; longer for newcomers.
+
+Section D3: MODULAR ARCHITECTURE QUALITY ASSESSMENT
+
+This modular architecture ensures:
+
+✅ Clear separation of concerns: Core modules handle configuration, pipelines, guardrails, and auditing separately from plugin implementations. Each plugin is dedicated to a single domain (e.g., Python quality or SAST).
+
+✅ Single responsibility per module: Modules are scoped to configuration, guardrails, validation pipeline, audit, sandboxing, etc. Overlap is minimal.
+
+✅ Core protected from plugin failures: Sandbox isolation and error handling prevent plugin crashes from compromising the core
+github.com
+.
+
+✅ Extensibility without core changes: New servers can be registered via JSON manifest without modifying orchestrator code
+github.com
+.
+
+✅ Complete audit/observability capability: Ledger entries and weekly reports provide full traceability
+github.com
+.
+
+✅ Deterministic and testable behavior: Sandboxing and fixed pipeline ordering yield reproducible results. Test suites cover major components.
+
+✅ Well‑defined module boundaries: Directory structure and manifest clearly delineate responsibilities, promoting maintainability.
+
+✅ Manageable dependencies (no circular deps): Dependencies follow a clear tree; modules depend on lower‑level utilities but not vice versa.
+
+✅ Consistent interface contracts: MCP calls use consistent JSON structures; ChangePlan and UnifiedDiff schemas enforce uniform input.
+
+✅ Scalable architecture for growth: Additional languages and tools can be accommodated by adding MCP servers; guardrails scale via new policies.
+
+Section D4: KEY TAKEAWAYS & PATTERNS
+D4.1 Core Architectural Patterns
+
+Service‑Oriented Tool Plane
+
+Description: All quality tools are exposed as services via MCP servers. Agents and orchestrators communicate through a consistent API, abstracting away language‑specific commands.
+github.com
+
+Benefits: Simplifies discovery and invocation; enforces a single point of control; supports polyglot extensions.
+
+Trade‑offs: Requires manifest management and process orchestration; minor overhead in inter‑process communication.
+
+Policy‑As‑Code
+
+Description: Guardrails are expressed as JSON Schemas and OPA policies stored under version control. Semgrep rule packs enforce code patterns. Policies are declarative and easily audited.
+github.com
+
+Benefits: Changes to policies are transparent; policies can be reviewed like code; enforcement is deterministic and testable.
+
+Trade‑offs: Requires expertise in OPA and rule languages; policy changes can inadvertently block valid code if not tested thoroughly.
+
+Deterministic Pipeline with Sandbox Isolation
+
+Description: The SafePatch pipeline runs stages in a fixed sequence inside isolated workspaces with no network access.
+github.com
+
+Benefits: Ensures reproducible outcomes and prevents environment variability; reduces risk of data exfiltration.
+
+Trade‑offs: Pipeline can be slow; some dynamic analyses (e.g., network calls) are impossible in sandbox.
+
+D4.2 Reusable Design Decisions
+
+Decisions Worth Borrowing:
+
+✅ Manifest‑Driven Plugin Registration – Using a declarative JSON file to register and configure plugins simplifies discovery and reduces hard‑coded logic. Could be applied to other plugin systems.
+
+✅ Append‑Only Ledger for Auditing – Storing signed JSON entries of all operations enables forensic analysis and compliance reporting.
+
+✅ Schema Validation Before Execution – Validating input structures (ChangePlan, diffs) prevents malformed or malicious data from reaching execution stages and reduces runtime errors.
+
+Decisions to Avoid:
+
+❌ Overreliance on PowerShell for Orchestration – Mixing PowerShell and Python can confuse contributors. A unified language or dedicated orchestration framework could simplify development.
+
+❌ Lack of Automated Plugin Scaffolding – New plugins require manual copy/paste of existing scripts. Providing a generator would reduce human error and encourage adoption.
+
+Section D5: CROSS‑SYSTEM COMPARISON MATRIX
+
+Since this report covers a single system, a comparison matrix with other systems is omitted. However, the architecture could be contrasted with other plugin systems (e.g., IDE extensions, browser add‑ons) by analyzing discovery methods, loading strategies, isolation levels, and extension points.

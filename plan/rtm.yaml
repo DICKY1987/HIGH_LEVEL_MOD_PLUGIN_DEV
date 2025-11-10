@@ -1,0 +1,16 @@
+- deliverable: DEL-CORE-RUNTIME
+  acceptance: [AC-CORE-1]
+  files: [fwgp/watcher.py, fwgp/pipeline.py, fwgp/dispatcher.py, fwgp/git_adapter.py]
+  tests: [tests/conformance/test_plugin_hooks.py::test_end_to_end_no_plugins]
+  evidence: []
+- deliverable: DEL-PLUGIN-SDK
+  acceptance: [AC-SDK-1]
+  files: [fwgp/plugins/base.py, fwgp/events.py]
+  tests: [tests/conformance/test_plugin_hooks.py::test_base_plugin_hooks_exist]
+  evidence: []
+- deliverable: DEL-CONFORMANCE
+  acceptance: [AC-CONF-1, AC-CONF-2]
+  files: [fwgp/schemas/manifest.json, fwgp/discovery.py, fwgp/state.py]
+  tests: [tests/conformance/test_manifest_basic.py::test_manifest_has_required_fields, tests/conformance/test_dispatcher_circuit.py::test_circuit_breaker_disables_after_three_failures]
+  evidence: []
+
